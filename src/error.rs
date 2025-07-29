@@ -20,3 +20,24 @@ pub enum BridgeError {
     #[error("Client connection error: {0}")]
     ClientError(std::io::Error),
 }
+
+#[derive(Debug, Error)]
+pub enum ArrusError {
+    #[error("Socket {0} not found")]
+    SocketNotFound(u32),
+
+    #[error("Failed to send message")]
+    SendError,
+
+    #[error("Missing required arguments")]
+    MissingArgs,
+
+    #[error("Serialization error: {0}")]
+    SerializationError(#[from] serde_json::Error),
+
+    #[error("Bridge error: {0}")]
+    BridgeError(#[from] BridgeError),
+
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+}

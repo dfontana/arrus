@@ -2,19 +2,40 @@ mod activity;
 mod bridge;
 mod error;
 mod logger;
+mod server;
 
 use activity::{ActivityData, ActivityMessage, ActivityTimestamps};
 use bridge::BridgeServer;
 use logger::Logger;
+use server::RpcServer;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let logger = Logger::new("main");
-    logger.info("Starting arRPC bridge server");
+    logger.info("Starting arRPC server suite");
 
+    // Initialize bridge server
     let bridge_server = BridgeServer::new()?;
     let sender = bridge_server.get_sender();
 
+    // Initialize RPC server
+    let rpc_server = RpcServer::new();
+
+    // Start bridge server
+    let bridge_handle = tokio::spawn(async move {
+        if let Err(e) = bridge_server.start().await {
+            eprintln!("Bridge server error: {}", e);
+        }
+    });
+
+    // Start RPC server
+    let rpc_handle = tokio::spawn(async move {
+        if let Err(e) = rpc_server.run().await {
+            eprintln!("RPC server error: {}", e);
+        }
+    });
+
+    // Test activity after brief delay
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
@@ -52,11 +73,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     tokio::select! {
-        result = bridge_server.start() => {
-            if let Err(e) = result {
-                logger.error(&format!("Failed to start bridge server: {}", e));
-                return Err(e.into());
-            }
+        _ = bridge_handle => {
+            logger.error("Bridge server exited");
+        }
+        _ = rpc_handle => {
+            logger.error("RPC server exited");
         }
         _ = tokio::signal::ctrl_c() => {
             logger.info("Shutting down");
