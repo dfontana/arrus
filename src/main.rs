@@ -2,25 +2,22 @@ mod activity;
 mod bridge;
 mod config;
 mod connection_manager;
-mod db;
-mod error;
-mod logger;
+mod database;
 mod process;
 mod server;
 mod transports;
 
 use bridge::BridgeServer;
 use config::load_database_config;
-use logger::Logger;
+use kitchen_sink::logging;
 use process::ProcessDetector;
 use server::RpcServer;
+use tracing::{error, info};
 use transports::WebSocketTransport;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let logger = Logger::new("main");
-    logger.info("Starting arRPC server suite");
-
+async fn main() -> Result<(), anyhow::Error> {
+    logging::initalize_logging();
     // Initialize bridge server
     let bridge_server = BridgeServer::new()?;
     let sender = bridge_server.get_sender();
@@ -40,21 +37,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start bridge server
     let bridge_handle = tokio::spawn(async move {
         if let Err(e) = bridge_server.start().await {
-            eprintln!("Bridge server error: {}", e);
+            eprintln!("Bridge server error: {e}");
         }
     });
 
     // Start RPC server
     let rpc_handle = tokio::spawn(async move {
         if let Err(e) = rpc_server.run().await {
-            eprintln!("RPC server error: {}", e);
+            eprintln!("RPC server error: {e}");
         }
     });
 
     // Start WebSocket transport
     let websocket_handle = tokio::spawn(async move {
         if let Err(e) = websocket_transport.start(transport_handlers).await {
-            eprintln!("WebSocket transport error: {}", e);
+            eprintln!("WebSocket transport error: {e}");
         }
     });
 
@@ -63,19 +60,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::select! {
         _ = bridge_handle => {
-            logger.error("Bridge server exited");
+            error!("Bridge server exited");
         }
         _ = rpc_handle => {
-            logger.error("RPC server exited");
+            error!("RPC server exited");
         }
         _ = websocket_handle => {
-            logger.error("WebSocket transport exited");
+            error!("WebSocket transport exited");
         }
         _ = process_handle => {
-            logger.error("Process detector exited");
+            error!("Process detector exited");
         }
         _ = tokio::signal::ctrl_c() => {
-            logger.info("Shutting down");
+            info!("Shutting down");
         }
     }
 

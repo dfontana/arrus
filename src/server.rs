@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use crate::error::ArrusError;
-
 mod handlers;
 mod protocol;
 mod types;
@@ -67,7 +65,7 @@ impl RpcServer {
 
             // Send ready message
             if let Err(e) = socket.send(ready_message) {
-                eprintln!("Failed to send READY message: {}", e);
+                eprintln!("Failed to send READY message: {e}");
                 return;
             }
 
@@ -107,7 +105,7 @@ impl RpcServer {
 
             // Process specific commands
             if let Err(e) = process_command(socket_id, request, &active_sockets, &event_tx) {
-                eprintln!("Error processing command: {}", e);
+                eprintln!("Error processing command: {e}");
             }
         })
     }
@@ -139,12 +137,12 @@ impl RpcServer {
     }
 
     /// Run the RPC server event loop
-    pub async fn run(mut self) -> Result<(), ArrusError> {
+    pub async fn run(mut self) -> Result<(), anyhow::Error> {
         println!("RPC Server started");
 
         while let Some(event) = self.event_rx.recv().await {
             if let Err(e) = self.handle_event(event).await {
-                eprintln!("Error handling event: {}", e);
+                eprintln!("Error handling event: {e}");
             }
         }
 
@@ -152,7 +150,7 @@ impl RpcServer {
     }
 
     /// Handle events from the event loop
-    async fn handle_event(&mut self, event: RpcEvent) -> Result<(), ArrusError> {
+    async fn handle_event(&mut self, event: RpcEvent) -> Result<(), anyhow::Error> {
         match event {
             RpcEvent::Connection {
                 socket_id,
@@ -165,13 +163,13 @@ impl RpcServer {
 
             RpcEvent::Disconnection { socket_id } => {
                 if self.config.debug_mode {
-                    println!("Connection closed: {}", socket_id);
+                    println!("Connection closed: {socket_id}");
                 }
             }
 
             RpcEvent::Message { socket_id, request } => {
                 if self.config.debug_mode {
-                    println!("Message from {}: {:?}", socket_id, request);
+                    println!("Message from {socket_id}: {request:?}");
                 }
             }
 
@@ -181,14 +179,14 @@ impl RpcServer {
                 socket_id,
             } => {
                 if self.config.debug_mode {
-                    println!("Activity update: socket={}, pid={:?}", socket_id, pid);
+                    println!("Activity update: socket={socket_id}, pid={pid:?}");
                 }
                 self.forward_activity(activity, pid, socket_id).await?;
             }
 
             RpcEvent::Invite { code, callback } => {
                 if self.config.debug_mode {
-                    println!("Invite browser request: {}", code);
+                    println!("Invite browser request: {code}");
                 }
                 let is_valid = self.validate_invite(&code).await?;
                 callback(is_valid);
@@ -196,7 +194,7 @@ impl RpcServer {
 
             RpcEvent::GuildTemplate { code, callback } => {
                 if self.config.debug_mode {
-                    println!("Guild template browser request: {}", code);
+                    println!("Guild template browser request: {code}");
                 }
                 let is_valid = self.validate_guild_template(&code).await?;
                 callback(is_valid);
@@ -204,7 +202,7 @@ impl RpcServer {
 
             RpcEvent::DeepLink { params } => {
                 if self.config.debug_mode {
-                    println!("Deep link: {}", params);
+                    println!("Deep link: {params}");
                 }
                 self.handle_deep_link_event(params).await?;
             }
@@ -219,30 +217,30 @@ impl RpcServer {
         activity: Box<Option<ProcessedActivity>>,
         _pid: Option<u32>,
         _socket_id: String,
-    ) -> Result<(), ArrusError> {
+    ) -> Result<(), anyhow::Error> {
         if self.config.debug_mode {
-            println!("Forwarding activity: {:?}", activity);
+            println!("Forwarding activity: {activity:?}");
         }
         // TODO: Integrate with bridge server
         Ok(())
     }
 
     /// Validate invite code (stub implementation)
-    async fn validate_invite(&self, _code: &str) -> Result<bool, ArrusError> {
+    async fn validate_invite(&self, _code: &str) -> Result<bool, anyhow::Error> {
         // TODO: Implement actual validation against Discord API
         Ok(true)
     }
 
     /// Validate guild template code (stub implementation)
-    async fn validate_guild_template(&self, _code: &str) -> Result<bool, ArrusError> {
+    async fn validate_guild_template(&self, _code: &str) -> Result<bool, anyhow::Error> {
         // TODO: Implement actual validation against Discord API
         Ok(true)
     }
 
     /// Handle deep link event (stub implementation)
-    async fn handle_deep_link_event(&self, params: String) -> Result<(), ArrusError> {
+    async fn handle_deep_link_event(&self, params: String) -> Result<(), anyhow::Error> {
         if self.config.debug_mode {
-            println!("Processing deep link: {}", params);
+            println!("Processing deep link: {params}");
         }
         // TODO: Implement deep link handling
         Ok(())

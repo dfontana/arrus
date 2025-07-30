@@ -1,6 +1,5 @@
 use crate::activity::ActivityMessage;
-use crate::error::BridgeError;
-use crate::logger::Logger;
+use anyhow::anyhow;
 use axum::{
     Router,
     extract::{
@@ -14,6 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast, mpsc};
+use tracing::{error, info};
 
 #[derive(Debug, Clone)]
 pub struct BridgeConfig {
@@ -31,13 +31,13 @@ impl Default for BridgeConfig {
 }
 
 impl BridgeConfig {
-    pub fn from_env() -> Result<Self, BridgeError> {
+    pub fn from_env() -> Result<Self, anyhow::Error> {
         let mut config = Self::default();
 
         if let Ok(port_str) = std::env::var("ARRPC_BRIDGE_PORT") {
             config.port = port_str
                 .parse()
-                .map_err(|_| BridgeError::InvalidPort(port_str))?;
+                .map_err(|_| anyhow!("Invalid port: {}", port_str))?;
         }
 
         Ok(config)
@@ -48,7 +48,6 @@ impl BridgeConfig {
 pub struct AppState {
     last_messages: Arc<RwLock<HashMap<String, ActivityMessage>>>,
     broadcast_tx: broadcast::Sender<ActivityMessage>,
-    logger: Logger,
 }
 
 pub struct BridgeServer {
@@ -58,16 +57,14 @@ pub struct BridgeServer {
 }
 
 impl BridgeServer {
-    pub fn new() -> Result<Self, BridgeError> {
+    pub fn new() -> Result<Self, anyhow::Error> {
         let config = BridgeConfig::from_env()?;
-        let logger = Logger::new("bridge");
         let (broadcast_tx, _) = broadcast::channel(100);
         let (activity_tx, mut activity_rx) = mpsc::unbounded_channel::<ActivityMessage>();
 
         let state = AppState {
             last_messages: Arc::new(RwLock::new(HashMap::new())),
             broadcast_tx: broadcast_tx.clone(),
-            logger: logger.clone(),
         };
 
         let state_clone = state.clone();
@@ -79,7 +76,7 @@ impl BridgeServer {
                 }
 
                 if state_clone.broadcast_tx.send(message).is_err() {
-                    state_clone.logger.error("Failed to broadcast message");
+                    error!("Failed to broadcast message");
                 }
             }
         });
@@ -91,23 +88,19 @@ impl BridgeServer {
         })
     }
 
-    pub async fn start(&self) -> Result<(), BridgeError> {
+    pub async fn start(&self) -> Result<(), anyhow::Error> {
         let app = Router::new()
             .route("/", get(websocket_handler))
             .with_state(self.state.clone());
 
         let addr = format!("{}:{}", self.config.bind_address, self.config.port);
-        self.state
-            .logger
-            .info(&format!("listening on {}", self.config.port));
+        info!("listening on {}", self.config.port);
 
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
-            .map_err(|e| BridgeError::BindFailed(addr.clone(), e))?;
+            .map_err(|e| anyhow!("Bind failed to {} {:?}", addr.clone(), e))?;
 
-        axum::serve(listener, app)
-            .await
-            .map_err(BridgeError::ClientError)?;
+        axum::serve(listener, app).await.map_err(|e| anyhow!(e))?;
 
         Ok(())
     }
@@ -122,7 +115,7 @@ async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) 
 }
 
 async fn handle_socket(socket: WebSocket, state: AppState) {
-    state.logger.info("web connected");
+    info!("web connected");
 
     let (mut sender, mut receiver) = socket.split();
     let mut broadcast_rx = state.broadcast_tx.subscribe();
@@ -133,7 +126,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             if message.activity.is_some() {
                 if let Ok(json) = serde_json::to_string(message) {
                     if sender.send(Message::Text(json)).await.is_err() {
-                        state.logger.error("Failed to send catch-up message");
+                        error!("Failed to send catch-up message");
                         return;
                     }
                 }
@@ -169,5 +162,5 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         _ = recv_task => {},
     }
 
-    state.logger.info("web disconnected");
+    info!("web disconnected");
 }

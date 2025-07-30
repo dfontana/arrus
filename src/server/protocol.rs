@@ -97,6 +97,8 @@ pub mod activity_types {
 
 /// Discord protocol validation
 pub mod validation {
+    use anyhow::bail;
+
     /// Maximum length for activity name
     pub const MAX_NAME_LENGTH: usize = 128;
 
@@ -117,21 +119,18 @@ pub mod validation {
         field: &str,
         max_length: usize,
         field_name: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), anyhow::Error> {
         if field.len() > max_length {
-            Err(format!(
-                "{} exceeds maximum length of {}",
-                field_name, max_length
-            ))
+            bail!("{field_name} exceeds maximum length of {max_length}")
         } else {
             Ok(())
         }
     }
 
     /// Validate button URL format
-    pub fn validate_button_url(url: &str) -> Result<(), String> {
+    pub fn validate_button_url(url: &str) -> Result<(), anyhow::Error> {
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            Err("Button URL must start with http:// or https://".to_string())
+            bail!("Button URL must start with http:// or https://")
         } else {
             Ok(())
         }

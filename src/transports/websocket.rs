@@ -1,6 +1,4 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-
+use anyhow::bail;
 use axum::{
     Router,
     extract::{
@@ -13,11 +11,12 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::connection_manager::{ConnectionManager, HashMapConnectionManager};
-use crate::error::ArrusError;
 use crate::server::{RpcMessage, RpcRequest, SocketConnection, TransportHandlers, TransportType};
 
 const PORT_RANGE: (u16, u16) = (6463, 6472);
@@ -68,18 +67,8 @@ fn default_encoding() -> String {
     "json".to_string()
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ValidationError {
-    #[error("Unsupported version: {0}")]
-    UnsupportedVersion(u8),
-    #[error("Unsupported encoding: {0}")]
-    UnsupportedEncoding(String),
-    #[error("Disallowed origin: {0}")]
-    DisallowedOrigin(String),
-}
-
 impl ConnectionParams {
-    pub fn validate(&self, config: &WebSocketConfig) -> Result<(), ValidationError> {
+    pub fn validate(&self, config: &WebSocketConfig) -> Result<(), anyhow::Error> {
         config
             .validate_version(self.v)
             .and_then(|_| config.validate_encoding(&self.encoding))
@@ -87,29 +76,29 @@ impl ConnectionParams {
 }
 
 impl WebSocketConfig {
-    fn validate_version(&self, version: u8) -> Result<(), ValidationError> {
+    fn validate_version(&self, version: u8) -> Result<(), anyhow::Error> {
         if self.supported_versions.contains(&version) {
             Ok(())
         } else {
-            Err(ValidationError::UnsupportedVersion(version))
+            bail!("Unsupported version: {}", version)
         }
     }
 
-    fn validate_encoding(&self, encoding: &str) -> Result<(), ValidationError> {
+    fn validate_encoding(&self, encoding: &str) -> Result<(), anyhow::Error> {
         if self.supported_encodings.contains(&encoding.to_string()) {
             Ok(())
         } else {
-            Err(ValidationError::UnsupportedEncoding(encoding.to_string()))
+            bail!("Unsupported encoding: {}", encoding)
         }
     }
 
-    fn validate_origin(&self, origin_header: Option<&str>) -> Result<(), ValidationError> {
+    fn validate_origin(&self, origin_header: Option<&str>) -> Result<(), anyhow::Error> {
         match origin_header {
             Some(origin) if !origin.is_empty() => {
                 if self.allowed_origins.contains(&origin.to_string()) {
                     Ok(())
                 } else {
-                    Err(ValidationError::DisallowedOrigin(origin.to_string()))
+                    bail!("Disallowed origin: {}", origin)
                 }
             }
             _ => Ok(()), // No origin header or empty origin is allowed
@@ -145,7 +134,7 @@ impl WebSocketTransport {
         }
     }
 
-    pub async fn start(&mut self, handlers: TransportHandlers) -> Result<(), ArrusError> {
+    pub async fn start(&mut self, handlers: TransportHandlers) -> Result<(), anyhow::Error> {
         let state = AppState {
             handlers,
             connections: HashMapConnectionManager::new(),
@@ -162,46 +151,40 @@ impl WebSocketTransport {
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
             if self.config.debug_mode {
-                println!("Trying to bind WebSocket server to port {}", port);
+                println!("Trying to bind WebSocket server to port {port}");
             }
 
             match TcpListener::bind(&addr).await {
                 Ok(listener) => {
-                    println!("WebSocket server listening on {}", addr);
+                    println!("WebSocket server listening on {addr}");
                     self.active_port = Some(port);
 
                     axum::serve(
                         listener,
                         app.into_make_service_with_connect_info::<SocketAddr>(),
                     )
-                    .await
-                    .map_err(|e| ArrusError::IoError(std::io::Error::other(e)))?;
+                    .await?;
 
                     return Ok(());
                 }
                 Err(e) => {
                     if e.kind() == std::io::ErrorKind::AddrInUse {
                         if self.config.debug_mode {
-                            println!("Port {} is in use, trying next port", port);
+                            println!("Port {port} is in use, trying next port");
                         }
                         continue;
                     } else {
-                        return Err(ArrusError::IoError(std::io::Error::other(format!(
-                            "Failed to bind to {}: {}",
-                            addr, e
-                        ))));
+                        bail!("Can't bind {}. {}", addr, e);
                     }
                 }
             }
         }
 
-        Err(ArrusError::IoError(std::io::Error::new(
-            std::io::ErrorKind::AddrInUse,
-            format!(
-                "No available ports in range {}-{}",
-                self.config.port_range.0, self.config.port_range.1
-            ),
-        )))
+        bail!(
+            "No available ports in range {}-{}",
+            self.config.port_range.0,
+            self.config.port_range.1
+        )
     }
 
     pub fn get_active_port(&self) -> Option<u16> {
@@ -219,11 +202,18 @@ async fn websocket_handler(
     let validation_result = validate_connection(&params, &headers, &state.config);
 
     if let Err(e) = validation_result {
-        log_validation_error(&e, &state.config);
-        return Err(validation_error_to_status_code(&e));
+        if state.config.debug_mode {
+            println!("Connection validation failed: {e}");
+        }
+        return Err(StatusCode::BAD_REQUEST);
     }
 
-    log_new_connection(&addr, &params, &state.config);
+    if state.config.debug_mode {
+        println!(
+            "New WebSocket connection from {}: client_id={}, version={}, encoding={}",
+            addr, params.client_id, params.v, params.encoding
+        );
+    }
     Ok(ws.on_upgrade(move |socket| handle_websocket(socket, params, state)))
 }
 
@@ -231,34 +221,12 @@ fn validate_connection(
     params: &ConnectionParams,
     headers: &HeaderMap,
     config: &WebSocketConfig,
-) -> Result<(), ValidationError> {
+) -> Result<(), anyhow::Error> {
     let origin_header = headers.get("origin").and_then(|h| h.to_str().ok());
 
     params
         .validate(config)
         .and_then(|_| config.validate_origin(origin_header))
-}
-
-fn validation_error_to_status_code(error: &ValidationError) -> StatusCode {
-    match error {
-        ValidationError::DisallowedOrigin(_) => StatusCode::FORBIDDEN,
-        _ => StatusCode::BAD_REQUEST,
-    }
-}
-
-fn log_validation_error(error: &ValidationError, config: &WebSocketConfig) {
-    if config.debug_mode {
-        println!("Connection validation failed: {}", error);
-    }
-}
-
-fn log_new_connection(addr: &SocketAddr, params: &ConnectionParams, config: &WebSocketConfig) {
-    if config.debug_mode {
-        println!(
-            "New WebSocket connection from {}: client_id={}, version={}, encoding={}",
-            addr, params.client_id, params.v, params.encoding
-        );
-    }
 }
 
 async fn handle_websocket(socket: WebSocket, params: ConnectionParams, state: AppState) {
@@ -301,21 +269,21 @@ async fn handle_websocket(socket: WebSocket, params: ConnectionParams, state: Ap
         tokio::spawn(async move {
             while let Some(message) = message_rx.recv().await {
                 if config.debug_mode {
-                    println!("Sending message to {}: {:?}", socket_id, message);
+                    println!("Sending message to {socket_id}: {message:?}");
                 }
 
                 match serde_json::to_string(&message) {
                     Ok(json) => {
                         if let Err(e) = ws_sender.send(Message::Text(json)).await {
                             if config.debug_mode {
-                                println!("Failed to send message to {}: {}", socket_id, e);
+                                println!("Failed to send message to {socket_id}: {e}");
                             }
                             break;
                         }
                     }
                     Err(e) => {
                         if config.debug_mode {
-                            println!("Failed to serialize message: {}", e);
+                            println!("Failed to serialize message: {e}");
                         }
                         break;
                     }
@@ -333,7 +301,7 @@ async fn handle_websocket(socket: WebSocket, params: ConnectionParams, state: Ap
                 match msg {
                     Ok(Message::Text(text)) => {
                         if config.debug_mode {
-                            println!("Received message from {}: {}", socket_id, text);
+                            println!("Received message from {socket_id}: {text}");
                         }
 
                         match serde_json::from_str::<RpcRequest>(&text) {
@@ -342,10 +310,7 @@ async fn handle_websocket(socket: WebSocket, params: ConnectionParams, state: Ap
                             }
                             Err(e) => {
                                 if config.debug_mode {
-                                    println!(
-                                        "Failed to parse RPC message from {}: {}",
-                                        socket_id, e
-                                    );
+                                    println!("Failed to parse RPC message from {socket_id}: {e}");
                                 }
                                 // Could send error response here
                             }
@@ -353,15 +318,12 @@ async fn handle_websocket(socket: WebSocket, params: ConnectionParams, state: Ap
                     }
                     Ok(Message::Binary(_)) => {
                         if config.debug_mode {
-                            println!("Binary message received from {}, not supported", socket_id);
+                            println!("Binary message received from {socket_id}, not supported");
                         }
                     }
                     Ok(Message::Close(frame)) => {
                         if config.debug_mode {
-                            println!(
-                                "WebSocket close frame received from {}: {:?}",
-                                socket_id, frame
-                            );
+                            println!("WebSocket close frame received from {socket_id}: {frame:?}");
                         }
                         break;
                     }
@@ -373,7 +335,7 @@ async fn handle_websocket(socket: WebSocket, params: ConnectionParams, state: Ap
                     }
                     Err(e) => {
                         if config.debug_mode {
-                            println!("WebSocket error for connection {}: {}", socket_id, e);
+                            println!("WebSocket error for connection {socket_id}: {e}");
                         }
                         break;
                     }
@@ -395,6 +357,6 @@ async fn handle_websocket(socket: WebSocket, params: ConnectionParams, state: Ap
     (state.handlers.on_close)(socket_id);
 
     if state.config.debug_mode {
-        println!("WebSocket connection {} closed", socket_id);
+        println!("WebSocket connection {socket_id} closed");
     }
 }

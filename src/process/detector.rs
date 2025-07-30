@@ -1,18 +1,20 @@
+use super::path_processor::ProcessedPath;
 use crate::activity::ActivityMessage;
-use crate::db::{DatabaseConfig, DatabaseManager};
-use crate::process::{
-    activity_manager::ActivityManager, database::GameDatabase, error::DetectorError,
-    path_processor::PathProcessor, scanner::ProcessScanner,
+use crate::database::{
+    DatabaseConfig, ExecutableEntry, GameDatabase, GameEntry, OperatingSystem, store,
 };
-use std::sync::Arc;
+use crate::process::{
+    activity_manager::ActivityManager, path_processor::PathProcessor, scanner::ProcessScanner,
+};
+use kitchen_sink::simple_store::Store;
 use std::time::Duration;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 pub struct ProcessDetector {
+    database: Store<GameDatabase>,
     scanner: ProcessScanner,
     path_processor: PathProcessor,
-    database: Arc<RwLock<GameDatabase>>,
     activity_manager: ActivityManager,
     scan_interval: Duration,
 }
@@ -21,51 +23,13 @@ impl ProcessDetector {
     pub async fn new_with_manager(
         message_sender: mpsc::UnboundedSender<ActivityMessage>,
         db_config: Option<DatabaseConfig>,
-    ) -> Result<Self, DetectorError> {
+    ) -> Result<Self, anyhow::Error> {
         let config = db_config.unwrap_or_default();
-
-        // Create database manager
-        let mut db_manager = DatabaseManager::new(config.clone())
-            .await
-            .map_err(|e| DetectorError::Database(e.into()))?;
-
-        // Initialize database manager
-        db_manager
-            .initialize()
-            .await
-            .map_err(|e| DetectorError::Database(e.into()))?;
-
-        // Load initial database
-        let database = if db_manager.get_database_info().await.exists {
-            GameDatabase::load_from_file(&config.file_paths.database_file)?
-        } else {
-            // Wait for initial download
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            if db_manager.get_database_info().await.exists {
-                GameDatabase::load_from_file(&config.file_paths.database_file)?
-            } else {
-                return Err(DetectorError::Database(
-                    crate::process::error::DatabaseError::LoadError {
-                        path: config.file_paths.database_file.display().to_string(),
-                        source: serde_json::Error::io(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            "Database not available after initialization",
-                        )),
-                    },
-                ));
-            }
-        };
-
-        tracing::info!(
-            "Loaded game database with {} total games, {} Linux-compatible",
-            database.len(),
-            database.linux_len()
-        );
-
+        let database = store(config.clone()).await?;
         Ok(Self {
+            database,
             scanner: ProcessScanner::new(),
             path_processor: PathProcessor::new(),
-            database: Arc::new(RwLock::new(database)),
             activity_manager: ActivityManager::new(message_sender),
             scan_interval: Duration::from_secs(5),
         })
@@ -103,7 +67,7 @@ impl ProcessDetector {
         }
     }
 
-    async fn scan_cycle(&mut self) -> Result<ScanStats, DetectorError> {
+    async fn scan_cycle(&mut self) -> Result<ScanStats, anyhow::Error> {
         let start_time = std::time::Instant::now();
 
         // Get all running processes
@@ -112,12 +76,12 @@ impl ProcessDetector {
 
         // Find matching games
         let mut detected_games = Vec::new();
-        let database = self.database.read().await;
+        let database = self.database.read();
+        let matcher = Matcher {};
 
         for process in processes {
             let path_info = self.path_processor.process_path(&process.executable_path);
-
-            if let Some(game) = database.find_match(&path_info, &process.arguments) {
+            if let Some(game) = matcher.find_match(&database, &path_info, &process.arguments) {
                 detected_games.push((game, process.pid));
             }
         }
@@ -135,6 +99,74 @@ impl ProcessDetector {
             games_detected: game_count,
             scan_duration: duration,
         })
+    }
+}
+
+struct Matcher;
+impl Matcher {
+    pub fn find_match<'a>(
+        &self,
+        db: &'a GameDatabase,
+        path_info: &ProcessedPath,
+        args: &[String],
+    ) -> Option<&'a GameEntry> {
+        // TODO: Why?
+        // Only search Linux-compatible games
+        for entry in &db.linux_entries {
+            for executable in &entry.executables {
+                // Skip non-Linux executables
+                if executable.os != OperatingSystem::Linux {
+                    continue;
+                }
+
+                // Skip launchers
+                if executable.is_launcher {
+                    continue;
+                }
+
+                if self.is_executable_match(executable, &path_info.variants, args) {
+                    return Some(entry);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn is_executable_match(
+        &self,
+        executable: &ExecutableEntry,
+        variants: &[String],
+        args: &[String],
+    ) -> bool {
+        let exe_name = &executable.name;
+
+        // Handle special ">" prefix for process name matching (like >java)
+        if let Some(process_name) = exe_name.strip_prefix('>') {
+            // For process name matching, check if the first variant (basename) matches
+            if let Some(first_variant) = variants.first() {
+                if first_variant != process_name {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        } else {
+            // Normal path matching - check if any variant matches the executable name
+            if !variants.iter().any(|variant| variant == exe_name) {
+                return false;
+            }
+        }
+
+        // If arguments are specified, check if process args contain the pattern
+        if let Some(required_args) = &executable.arguments {
+            let args_string = args.join(" ");
+            if !args_string.contains(required_args) {
+                return false;
+            }
+        }
+
+        true
     }
 }
 

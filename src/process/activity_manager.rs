@@ -1,5 +1,5 @@
 use crate::activity::{ActivityData, ActivityMessage, ActivityTimestamps};
-use crate::process::database::GameEntry;
+use crate::database::GameEntry;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;

@@ -1,12 +1,11 @@
 #![allow(dead_code)]
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-
-use crate::error::ArrusError;
 
 /// Socket counter for generating unique IDs
 pub type SocketCounter = Arc<Mutex<u32>>;
@@ -70,7 +69,7 @@ impl std::fmt::Display for RpcEventType {
             RpcEventType::Error => "ERROR",
             RpcEventType::Other => "OTHER",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -134,7 +133,7 @@ impl std::fmt::Display for RpcCommand {
             RpcCommand::DeepLink => "DEEP_LINK",
             RpcCommand::Unknown => "UNKNOWN",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -435,7 +434,7 @@ pub struct SocketConnection {
 }
 
 impl SocketConnection {
-    pub fn send(&self, message: RpcMessage) -> Result<(), ArrusError> {
-        self.sender.send(message).map_err(|_| ArrusError::SendError)
+    pub fn send(&self, message: RpcMessage) -> Result<(), anyhow::Error> {
+        self.sender.send(message).context("Failed socket send")
     }
 }

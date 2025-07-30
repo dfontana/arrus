@@ -1,4 +1,3 @@
-use crate::process::error::ProcessError;
 use std::fs;
 use std::path::PathBuf;
 
@@ -20,7 +19,7 @@ impl ProcessScanner {
         }
     }
 
-    pub fn scan_processes(&self) -> Result<Vec<ProcessInfo>, ProcessError> {
+    pub fn scan_processes(&self) -> Result<Vec<ProcessInfo>, anyhow::Error> {
         let mut processes = Vec::new();
 
         let entries = fs::read_dir(&self.proc_path)?;
@@ -48,16 +47,11 @@ impl ProcessScanner {
         Ok(processes)
     }
 
-    fn read_cmdline(&self, pid: u32) -> Result<(String, Vec<String>), ProcessError> {
+    fn read_cmdline(&self, pid: u32) -> Result<(String, Vec<String>), anyhow::Error> {
         let cmdline_path = self.proc_path.join(pid.to_string()).join("cmdline");
-
-        match fs::read_to_string(&cmdline_path) {
-            Ok(content) => {
-                let (executable, args) = self.parse_cmdline(&content);
-                Ok((executable, args))
-            }
-            Err(e) => Err(ProcessError::CmdlineRead { pid, source: e }),
-        }
+        let content = fs::read_to_string(&cmdline_path)?;
+        let (executable, args) = self.parse_cmdline(&content);
+        Ok((executable, args))
     }
 
     fn parse_cmdline(&self, content: &str) -> (String, Vec<String>) {

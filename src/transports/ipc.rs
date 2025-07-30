@@ -1,5 +1,5 @@
-use crate::error::ArrusError;
 use crate::server::{RpcMessage, RpcRequest, SocketConnection, TransportHandlers, TransportType};
+use anyhow::{anyhow, bail};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -23,16 +23,16 @@ pub enum IpcPacketType {
 }
 
 impl TryFrom<u32> for IpcPacketType {
-    type Error = ArrusError;
+    type Error = anyhow::Error;
 
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
+    fn try_from(value: u32) -> Result<Self, anyhow::Error> {
         match value {
             0 => Ok(IpcPacketType::Handshake),
             1 => Ok(IpcPacketType::Frame),
             2 => Ok(IpcPacketType::Close),
             3 => Ok(IpcPacketType::Ping),
             4 => Ok(IpcPacketType::Pong),
-            _ => Err(ArrusError::InvalidPacketType(value)),
+            _ => bail!("Invalid packet type: {value}"),
         }
     }
 }
@@ -46,7 +46,7 @@ pub struct IpcPacket {
 
 impl IpcPacket {
     /// Encode packet to binary format
-    pub fn encode(&self) -> Result<Vec<u8>, ArrusError> {
+    pub fn encode(&self) -> Result<Vec<u8>, anyhow::Error> {
         let json_data = serde_json::to_string(&self.data)?;
         let data_bytes = json_data.as_bytes();
         let data_size = data_bytes.len() as u32;
@@ -66,9 +66,9 @@ impl IpcPacket {
     }
 
     /// Decode packet from binary format
-    pub fn decode(buffer: &[u8]) -> Result<Self, ArrusError> {
+    pub fn decode(buffer: &[u8]) -> Result<Self, anyhow::Error> {
         if buffer.len() < 8 {
-            return Err(ArrusError::InsufficientData);
+            bail!("Insufficient data");
         }
 
         let mut cursor = Cursor::new(buffer);
@@ -83,7 +83,7 @@ impl IpcPacket {
         // Validate buffer has enough data
         let remaining_data = &buffer[8..];
         if remaining_data.len() < data_size as usize {
-            return Err(ArrusError::InsufficientData);
+            bail!("Insufficient data");
         }
 
         // Extract and parse JSON data
@@ -136,7 +136,7 @@ impl Default for IpcConfig {
             .unwrap_or_else(|_| "/tmp".to_string());
 
         Self {
-            socket_base_path: format!("{}/discord-ipc", base_path),
+            socket_base_path: format!("{base_path}/discord-ipc"),
             max_socket_tries: 10,
             debug_mode: std::env::var("ARRPC_DEBUG").is_ok(),
             supported_versions: vec![1],
@@ -164,14 +164,14 @@ pub struct HandshakeParams {
 }
 
 impl HandshakeParams {
-    pub fn from_json(data: &Value) -> Result<Self, ArrusError> {
+    pub fn from_json(data: &Value) -> Result<Self, anyhow::Error> {
         let version = data
             .get("v")
             .and_then(|v| v.as_u64())
-            .ok_or_else(|| ArrusError::MissingField("v".to_string()))?;
+            .ok_or_else(|| anyhow!("Missing field 'v'"))?;
 
         if version > u8::MAX as u64 {
-            return Err(ArrusError::InvalidVersion(version));
+            bail!("Invalid version {version}");
         }
 
         let client_id = data
@@ -186,15 +186,15 @@ impl HandshakeParams {
         })
     }
 
-    pub fn validate(&self, config: &IpcConfig) -> Result<(), ArrusError> {
+    pub fn validate(&self, config: &IpcConfig) -> Result<(), anyhow::Error> {
         // Version validation
         if !config.supported_versions.contains(&self.version) {
-            return Err(ArrusError::UnsupportedVersion(self.version));
+            bail!("Unsupported version {}", self.version);
         }
 
         // Client ID validation
         if self.client_id.is_empty() {
-            return Err(ArrusError::MissingClientId);
+            bail!("Missing client id");
         }
 
         Ok(())
@@ -213,7 +213,7 @@ pub struct IpcServer {
 }
 
 impl IpcServer {
-    pub async fn new(handlers: TransportHandlers) -> Result<Self, ArrusError> {
+    pub async fn new(handlers: TransportHandlers) -> Result<Self, anyhow::Error> {
         let config = IpcConfig::default();
 
         let mut server = Self {
@@ -232,7 +232,7 @@ impl IpcServer {
         Ok(server)
     }
 
-    async fn bind_to_available_socket(&mut self) -> Result<(), ArrusError> {
+    async fn bind_to_available_socket(&mut self) -> Result<(), anyhow::Error> {
         let socket_path = self.find_available_socket_path().await?;
 
         // Create Unix domain socket listener
@@ -258,7 +258,7 @@ impl IpcServer {
         Ok(())
     }
 
-    async fn find_available_socket_path(&self) -> Result<PathBuf, ArrusError> {
+    async fn find_available_socket_path(&self) -> Result<PathBuf, anyhow::Error> {
         for attempt in 0..self.config.max_socket_tries {
             let socket_path =
                 PathBuf::from(format!("{}-{}", self.config.socket_base_path, attempt));
@@ -298,10 +298,10 @@ impl IpcServer {
             }
         }
 
-        Err(ArrusError::SocketPathNotAvailable)
+        bail!("Socket path not available")
     }
 
-    async fn test_socket_availability(&self, path: &PathBuf) -> Result<bool, ArrusError> {
+    async fn test_socket_availability(&self, path: &PathBuf) -> Result<bool, anyhow::Error> {
         // Try to connect to the socket to see if it's in use
         match UnixStream::connect(path).await {
             Ok(stream) => {
@@ -325,7 +325,7 @@ impl IpcServer {
         }
     }
 
-    async fn test_discord_ipc_socket(&self, mut stream: UnixStream) -> Result<bool, ArrusError> {
+    async fn test_discord_ipc_socket(&self, mut stream: UnixStream) -> Result<bool, anyhow::Error> {
         use tokio::time::{Duration, timeout};
 
         let unique_id = {
@@ -364,12 +364,12 @@ impl IpcServer {
 
                 let data: Value = serde_json::from_slice(&data_buf)?;
                 if let Some(response_id) = data.as_u64() {
-                    Ok::<bool, ArrusError>(response_id == unique_id as u64)
+                    Ok::<bool, anyhow::Error>(response_id == unique_id as u64)
                 } else {
-                    Ok::<bool, ArrusError>(false)
+                    Ok::<bool, anyhow::Error>(false)
                 }
             } else {
-                Ok::<bool, ArrusError>(false)
+                Ok::<bool, anyhow::Error>(false)
             }
         })
         .await;
@@ -388,11 +388,11 @@ impl IpcServer {
         }
     }
 
-    pub async fn start(&mut self) -> Result<(), ArrusError> {
+    pub async fn start(&mut self) -> Result<(), anyhow::Error> {
         let listener = self
             .listener
             .take()
-            .ok_or_else(|| ArrusError::Io("Server not properly initialized".to_string()))?;
+            .ok_or_else(|| anyhow!("Server not properly initialized"))?;
 
         info!(
             "Starting IPC server on socket {:?}",
@@ -435,7 +435,7 @@ impl IpcServer {
         counter: Arc<Mutex<u32>>,
         handlers: TransportHandlers,
         config: IpcConfig,
-    ) -> Result<(), ArrusError> {
+    ) -> Result<(), anyhow::Error> {
         // Generate unique connection ID
         let socket_id = {
             let mut c = counter.lock().unwrap();
@@ -476,8 +476,8 @@ impl IpcServer {
 
         // Wait for either task to complete (connection closed)
         let result = tokio::select! {
-            result = read_task => result.unwrap_or_else(|e| Err(ArrusError::Io(e.to_string()))),
-            result = write_task => result.unwrap_or_else(|e| Err(ArrusError::Io(e.to_string()))),
+            result = read_task => result.unwrap_or_else(|e| bail!(e.to_string())),
+            result = write_task => result.unwrap_or_else(|e| bail!(e.to_string())),
         };
 
         // Clean up connection
@@ -503,7 +503,7 @@ impl IpcServer {
         handlers: TransportHandlers,
         config: IpcConfig,
         message_tx: mpsc::UnboundedSender<RpcMessage>,
-    ) -> Result<(), ArrusError> {
+    ) -> Result<(), anyhow::Error> {
         let mut handshook = false;
 
         loop {
@@ -537,7 +537,7 @@ impl IpcServer {
 
                 IpcPacketType::Handshake => {
                     if handshook {
-                        return Err(ArrusError::Io("Already handshook".to_string()));
+                        bail!("Already handshook");
                     }
 
                     Self::handle_handshake(
@@ -554,7 +554,7 @@ impl IpcServer {
 
                 IpcPacketType::Frame => {
                     if !handshook {
-                        return Err(ArrusError::Io("Need to handshake first".to_string()));
+                        bail!("Need to handshake first");
                     }
 
                     Self::handle_frame(socket_id, &handlers, &config, packet.data).await?;
@@ -570,7 +570,7 @@ impl IpcServer {
 
     async fn read_packet(
         stream: &mut tokio::net::unix::OwnedReadHalf,
-    ) -> Result<IpcPacket, ArrusError> {
+    ) -> Result<IpcPacket, anyhow::Error> {
         // Read 8-byte header first
         let mut header_buf = [0u8; 8];
         stream.read_exact(&mut header_buf).await?;
@@ -600,7 +600,7 @@ impl IpcServer {
         config: &IpcConfig,
         data: Value,
         message_tx: mpsc::UnboundedSender<RpcMessage>,
-    ) -> Result<(), ArrusError> {
+    ) -> Result<(), anyhow::Error> {
         if config.debug_mode {
             debug!("Processing handshake from {}: {:?}", socket_id, data);
         }
@@ -652,7 +652,7 @@ impl IpcServer {
         handlers: &TransportHandlers,
         config: &IpcConfig,
         data: Value,
-    ) -> Result<(), ArrusError> {
+    ) -> Result<(), anyhow::Error> {
         if config.debug_mode {
             debug!("Processing frame from {}: {:?}", socket_id, data);
         }
@@ -670,7 +670,7 @@ impl IpcServer {
         socket_id: u32,
         stream: &mut tokio::net::unix::OwnedWriteHalf,
         message_rx: &mut mpsc::UnboundedReceiver<RpcMessage>,
-    ) -> Result<(), ArrusError> {
+    ) -> Result<(), anyhow::Error> {
         loop {
             match message_rx.recv().await {
                 Some(message) => {
@@ -686,7 +686,7 @@ impl IpcServer {
                             "Failed to send frame to IPC connection {}: {}",
                             socket_id, e
                         );
-                        return Err(ArrusError::Io(e.to_string()));
+                        bail!(e);
                     }
                 }
                 None => {
@@ -697,7 +697,7 @@ impl IpcServer {
         }
     }
 
-    pub async fn shutdown(&mut self) -> Result<(), ArrusError> {
+    pub async fn shutdown(&mut self) -> Result<(), anyhow::Error> {
         info!("Shutting down IPC server");
 
         // Clean up connections map

@@ -1,8 +1,8 @@
+use anyhow::{anyhow, bail};
 use serde_json::Value;
 use std::sync::Arc;
 
 use super::types::*;
-use crate::error::ArrusError;
 
 /// Process RPC commands
 pub fn process_command(
@@ -10,11 +10,11 @@ pub fn process_command(
     request: RpcRequest,
     active_sockets: &ActiveSockets,
     event_tx: &EventSender,
-) -> Result<(), ArrusError> {
+) -> Result<(), anyhow::Error> {
     let socket_info = { active_sockets.lock().unwrap().get(&socket_id).cloned() };
 
     let Some(socket_info) = socket_info else {
-        return Err(ArrusError::SocketNotFound(socket_id));
+        bail!("Socket not found {socket_id}");
     };
 
     match request.cmd {
@@ -62,7 +62,7 @@ pub fn process_command(
 fn handle_connections_callback(
     socket_info: SocketInfo,
     nonce: Option<String>,
-) -> Result<(), ArrusError> {
+) -> Result<(), anyhow::Error> {
     let response = RpcMessage {
         cmd: RpcCommand::ConnectionsCallback,
         data: Some(serde_json::json!({ "code": 1000 })),
@@ -70,10 +70,7 @@ fn handle_connections_callback(
         nonce,
     };
 
-    socket_info
-        .sender
-        .send(response)
-        .map_err(|_| ArrusError::SendError)?;
+    socket_info.sender.send(response)?;
 
     Ok(())
 }
@@ -86,11 +83,10 @@ fn handle_set_activity(
     nonce: Option<String>,
     active_sockets: &ActiveSockets,
     event_tx: &EventSender,
-) -> Result<(), ArrusError> {
+) -> Result<(), anyhow::Error> {
     let args: SetActivityArgs = args
         .map(serde_json::from_value)
-        .transpose()
-        .map_err(ArrusError::SerializationError)?
+        .transpose()?
         .unwrap_or_default();
 
     // Update last PID
@@ -110,10 +106,7 @@ fn handle_set_activity(
                 nonce,
             };
 
-            socket_info
-                .sender
-                .send(response)
-                .map_err(|_| ArrusError::SendError)?;
+            socket_info.sender.send(response)?;
 
             let _ = event_tx.send(RpcEvent::Activity {
                 activity: Box::new(None),
@@ -140,10 +133,7 @@ fn handle_set_activity(
                 nonce,
             };
 
-            socket_info
-                .sender
-                .send(response)
-                .map_err(|_| ArrusError::SendError)?;
+            socket_info.sender.send(response)?;
 
             // Emit activity event
             let _ = event_tx.send(RpcEvent::Activity {
@@ -158,7 +148,10 @@ fn handle_set_activity(
 }
 
 /// Process activity data into internal format
-fn process_activity(activity: Activity, client_id: &str) -> Result<ProcessedActivity, ArrusError> {
+fn process_activity(
+    activity: Activity,
+    client_id: &str,
+) -> Result<ProcessedActivity, anyhow::Error> {
     let mut metadata = ActivityMetadata { button_urls: None };
 
     let mut button_labels = None;
@@ -221,10 +214,10 @@ fn handle_invite_browser(
     args: Option<Value>,
     nonce: Option<String>,
     event_tx: &EventSender,
-) -> Result<(), ArrusError> {
-    let args: BrowserArgs = args
-        .ok_or(ArrusError::MissingArgs)
-        .and_then(|v| serde_json::from_value(v).map_err(ArrusError::SerializationError))?;
+) -> Result<(), anyhow::Error> {
+    let args: BrowserArgs = args.ok_or(anyhow!("Missing args")).and_then(|v| {
+        serde_json::from_value(v).map_err(|e| anyhow!("Failed to deserialize {e}"))
+    })?;
 
     let callback = create_browser_callback(
         socket_info,
@@ -248,10 +241,10 @@ fn handle_guild_template_browser(
     args: Option<Value>,
     nonce: Option<String>,
     event_tx: &EventSender,
-) -> Result<(), ArrusError> {
-    let args: BrowserArgs = args
-        .ok_or(ArrusError::MissingArgs)
-        .and_then(|v| serde_json::from_value(v).map_err(ArrusError::SerializationError))?;
+) -> Result<(), anyhow::Error> {
+    let args: BrowserArgs = args.ok_or(anyhow!("Missing args")).and_then(|v| {
+        serde_json::from_value(v).map_err(|e| anyhow!("Failed to deserialize {e}"))
+    })?;
 
     let callback = create_browser_callback(
         socket_info,
@@ -313,10 +306,10 @@ fn create_browser_callback(
 }
 
 /// Handle DEEP_LINK command
-fn handle_deep_link(args: Option<Value>, event_tx: &EventSender) -> Result<(), ArrusError> {
-    let args: DeepLinkArgs = args
-        .ok_or(ArrusError::MissingArgs)
-        .and_then(|v| serde_json::from_value(v).map_err(ArrusError::SerializationError))?;
+fn handle_deep_link(args: Option<Value>, event_tx: &EventSender) -> Result<(), anyhow::Error> {
+    let args: DeepLinkArgs = args.ok_or(anyhow!("Missing args")).and_then(|v| {
+        serde_json::from_value(v).map_err(|e| anyhow!("Failed to deserialize {e}"))
+    })?;
 
     let _ = event_tx.send(RpcEvent::DeepLink {
         params: args.params,
