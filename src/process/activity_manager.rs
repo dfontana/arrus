@@ -121,8 +121,4 @@ impl ActivityManager {
             }
         }
     }
-
-    pub fn len(&self) -> usize {
-        self.active_games.len()
-    }
 }

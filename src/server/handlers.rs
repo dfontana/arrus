@@ -116,7 +116,7 @@ fn handle_set_activity(
                 .map_err(|_| ArrusError::SendError)?;
 
             let _ = event_tx.send(RpcEvent::Activity {
-                activity: None,
+                activity: Box::new(None),
                 pid: args.pid,
                 socket_id: socket_id.to_string(),
             });
@@ -147,7 +147,7 @@ fn handle_set_activity(
 
             // Emit activity event
             let _ = event_tx.send(RpcEvent::Activity {
-                activity: Some(processed),
+                activity: Box::new(Some(processed)),
                 pid: args.pid,
                 socket_id: socket_id.to_string(),
             });

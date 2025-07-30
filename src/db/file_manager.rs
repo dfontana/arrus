@@ -7,6 +7,7 @@ use tokio::fs as async_fs;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct BackupInfo {
     pub id: String,
@@ -16,12 +17,14 @@ pub struct BackupInfo {
     pub version_info: Option<String>,
 }
 
+#[allow(dead_code)]
 pub struct FileManager {
     database_path: PathBuf,
     temp_dir: PathBuf,
     backup_dir: PathBuf,
 }
 
+#[allow(dead_code)]
 impl FileManager {
     pub fn new(base_path: PathBuf) -> Result<Self> {
         let temp_dir = base_path.join("temp");

@@ -56,7 +56,7 @@ impl ProcessScanner {
                 let (executable, args) = self.parse_cmdline(&content);
                 Ok((executable, args))
             }
-            Err(e) => Err(ProcessError::CmdlineReadError { pid, source: e }),
+            Err(e) => Err(ProcessError::CmdlineRead { pid, source: e }),
         }
     }
 

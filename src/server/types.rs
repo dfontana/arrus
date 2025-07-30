@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -352,7 +354,7 @@ pub enum RpcEvent {
         request: RpcRequest,
     },
     Activity {
-        activity: Option<ProcessedActivity>,
+        activity: Box<Option<ProcessedActivity>>,
         pid: Option<u32>,
         socket_id: String,
     },

@@ -5,7 +5,7 @@ use crate::db::{
     scheduler::{SchedulerConfig, UpdateResult, UpdateScheduler, UpdateTrigger},
     validator::{ComparisonResult, DatabaseValidator, ValidationConfig, ValidationResult},
 };
-use crate::process::database::GameEntry;
+use crate::process::database::{GameEntry, OperatingSystem};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -27,6 +27,7 @@ pub struct FilePathConfig {
     pub temp_directory: PathBuf,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct BackupConfig {
     pub max_backups: usize,
@@ -56,6 +57,7 @@ impl Default for DatabaseConfig {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DatabaseInfo {
     pub path: PathBuf,
@@ -67,6 +69,7 @@ pub struct DatabaseInfo {
     pub last_update: Option<SystemTime>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DatabaseMetrics {
     pub last_update_timestamp: Option<SystemTime>,
@@ -80,6 +83,7 @@ pub struct DatabaseMetrics {
     pub backup_count: usize,
 }
 
+#[allow(dead_code)]
 pub struct DatabaseManager {
     config: DatabaseConfig,
     http_client: HttpClient,
@@ -90,6 +94,7 @@ pub struct DatabaseManager {
     current_etag: Arc<Mutex<Option<String>>>,
 }
 
+#[allow(dead_code)]
 impl DatabaseManager {
     pub async fn new(config: DatabaseConfig) -> Result<Self> {
         let http_client = HttpClient::new(config.http.clone())?;
@@ -182,103 +187,102 @@ impl DatabaseManager {
         let started_at = SystemTime::now();
 
         tracing::info!("Starting database update (trigger: {:?})", trigger);
+        self.increment_attempt_counter().await;
 
-        // Update metrics
-        {
-            let mut metrics = self.metrics.write().await;
-            metrics.total_update_attempts += 1;
-        }
-
-        let mut attempt = 0;
-        let mut last_error = None;
-
-        while attempt < self.config.scheduler.max_update_attempts {
-            attempt += 1;
-
+        for attempt in 1..=self.config.scheduler.max_update_attempts {
             match self.attempt_update().await {
                 Ok(comparison) => {
-                    let completed_at = SystemTime::now();
-                    let duration = start_time.elapsed();
-
-                    // Update metrics
-                    {
-                        let mut metrics = self.metrics.write().await;
-                        metrics.successful_updates += 1;
-                        metrics.last_update_timestamp = Some(completed_at);
-                        metrics.last_update_duration = Some(duration);
-                    }
-
-                    self.update_metrics().await?;
-
-                    let result = UpdateResult {
-                        trigger,
-                        started_at,
-                        completed_at,
-                        success: true,
-                        games_added: comparison.stats_change.added_count,
-                        games_removed: comparison.stats_change.removed_count,
-                        games_modified: comparison.stats_change.modified_count,
-                        error: None,
-                    };
-
-                    tracing::info!(
-                        "Database update completed successfully in {:?} (attempt {}): +{} -{} ~{}",
-                        duration,
-                        attempt,
-                        result.games_added,
-                        result.games_removed,
-                        result.games_modified
-                    );
-
-                    return Ok(result);
+                    return self
+                        .handle_update_success(trigger, started_at, start_time, attempt, comparison)
+                        .await;
                 }
                 Err(e) => {
-                    last_error = Some(e);
-                    tracing::warn!(
-                        "Database update attempt {} failed: {:?}",
-                        attempt,
-                        last_error
-                    );
+                    tracing::warn!("Database update attempt {} failed: {:?}", attempt, e);
 
                     if attempt < self.config.scheduler.max_update_attempts {
-                        let delay = Duration::from_secs(
-                            (self
-                                .config
-                                .scheduler
-                                .backoff_multiplier
-                                .powi(attempt as i32 - 1)) as u64,
-                        );
-                        tokio::time::sleep(delay).await;
+                        self.wait_before_retry(attempt).await;
+                    } else {
+                        return self.handle_update_failure(trigger, started_at, e).await;
                     }
                 }
             }
         }
 
-        // All attempts failed
-        {
-            let mut metrics = self.metrics.write().await;
-            metrics.failed_updates += 1;
-        }
+        unreachable!("Loop should have returned in all cases")
+    }
 
-        let error_msg = last_error
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "Unknown update failure".to_string());
+    async fn increment_attempt_counter(&self) {
+        self.metrics.write().await.total_update_attempts += 1;
+    }
 
-        // Try recovery
+    async fn handle_update_success(
+        &mut self,
+        trigger: UpdateTrigger,
+        started_at: SystemTime,
+        start_time: Instant,
+        attempt: u32,
+        comparison: ComparisonResult,
+    ) -> Result<UpdateResult> {
+        let completed_at = SystemTime::now();
+        let duration = start_time.elapsed();
+
+        self.update_success_metrics(completed_at, duration).await;
+        self.update_metrics().await?;
+
+        let result = UpdateResult {
+            trigger,
+            started_at,
+            completed_at,
+            success: true,
+            games_added: comparison.stats_change.added_count,
+            games_removed: comparison.stats_change.removed_count,
+            games_modified: comparison.stats_change.modified_count,
+            error: None,
+        };
+
+        tracing::info!(
+            "Database update completed successfully in {:?} (attempt {}): +{} -{} ~{}",
+            duration,
+            attempt,
+            result.games_added,
+            result.games_removed,
+            result.games_modified
+        );
+
+        Ok(result)
+    }
+
+    async fn update_success_metrics(&self, completed_at: SystemTime, duration: Duration) {
+        let mut metrics = self.metrics.write().await;
+        metrics.successful_updates += 1;
+        metrics.last_update_timestamp = Some(completed_at);
+        metrics.last_update_duration = Some(duration);
+    }
+
+    async fn wait_before_retry(&self, attempt: u32) {
+        let delay = Duration::from_secs(
+            (self
+                .config
+                .scheduler
+                .backoff_multiplier
+                .powi(attempt as i32 - 1)) as u64,
+        );
+        tokio::time::sleep(delay).await;
+    }
+
+    async fn handle_update_failure(
+        &mut self,
+        _trigger: UpdateTrigger,
+        _started_at: SystemTime,
+        last_error: DatabaseError,
+    ) -> Result<UpdateResult> {
+        self.metrics.write().await.failed_updates += 1;
+
+        let error_msg = last_error.to_string();
+
         if let Err(recovery_error) = self.attempt_recovery().await {
             tracing::error!("Recovery failed: {:?}", recovery_error);
         }
-
-        let _result = UpdateResult {
-            trigger,
-            started_at,
-            completed_at: SystemTime::now(),
-            success: false,
-            games_added: 0,
-            games_removed: 0,
-            games_modified: 0,
-            error: Some(error_msg.clone()),
-        };
 
         Err(DatabaseError::ConfigError(error_msg))
     }
@@ -414,7 +418,11 @@ impl DatabaseManager {
                                     let total = games.len();
                                     let linux = games
                                         .iter()
-                                        .filter(|g| g.executables.iter().any(|e| e.os == "linux"))
+                                        .filter(|g| {
+                                            g.executables
+                                                .iter()
+                                                .any(|e| e.os == OperatingSystem::Linux)
+                                        })
                                         .count();
                                     (Some(total), Some(linux))
                                 }

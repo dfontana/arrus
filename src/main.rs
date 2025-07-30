@@ -1,6 +1,7 @@
 mod activity;
 mod bridge;
 mod config;
+mod connection_manager;
 mod db;
 mod error;
 mod logger;

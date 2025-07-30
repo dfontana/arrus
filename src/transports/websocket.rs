@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -17,6 +16,7 @@ use serde::Deserialize;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, mpsc};
 
+use crate::connection_manager::{ConnectionManager, HashMapConnectionManager};
 use crate::error::ArrusError;
 use crate::server::{RpcMessage, RpcRequest, SocketConnection, TransportHandlers, TransportType};
 
@@ -80,15 +80,40 @@ pub enum ValidationError {
 
 impl ConnectionParams {
     pub fn validate(&self, config: &WebSocketConfig) -> Result<(), ValidationError> {
-        if !config.supported_versions.contains(&self.v) {
-            return Err(ValidationError::UnsupportedVersion(self.v));
-        }
+        config
+            .validate_version(self.v)
+            .and_then(|_| config.validate_encoding(&self.encoding))
+    }
+}
 
-        if !config.supported_encodings.contains(&self.encoding) {
-            return Err(ValidationError::UnsupportedEncoding(self.encoding.clone()));
+impl WebSocketConfig {
+    fn validate_version(&self, version: u8) -> Result<(), ValidationError> {
+        if self.supported_versions.contains(&version) {
+            Ok(())
+        } else {
+            Err(ValidationError::UnsupportedVersion(version))
         }
+    }
 
-        Ok(())
+    fn validate_encoding(&self, encoding: &str) -> Result<(), ValidationError> {
+        if self.supported_encodings.contains(&encoding.to_string()) {
+            Ok(())
+        } else {
+            Err(ValidationError::UnsupportedEncoding(encoding.to_string()))
+        }
+    }
+
+    fn validate_origin(&self, origin_header: Option<&str>) -> Result<(), ValidationError> {
+        match origin_header {
+            Some(origin) if !origin.is_empty() => {
+                if self.allowed_origins.contains(&origin.to_string()) {
+                    Ok(())
+                } else {
+                    Err(ValidationError::DisallowedOrigin(origin.to_string()))
+                }
+            }
+            _ => Ok(()), // No origin header or empty origin is allowed
+        }
     }
 }
 
@@ -102,7 +127,7 @@ struct ConnectionState {
 #[derive(Clone)]
 struct AppState {
     handlers: TransportHandlers,
-    connections: Arc<Mutex<HashMap<u32, ConnectionState>>>,
+    connections: HashMapConnectionManager<ConnectionState>,
     socket_counter: Arc<Mutex<u32>>,
     config: WebSocketConfig,
 }
@@ -123,7 +148,7 @@ impl WebSocketTransport {
     pub async fn start(&mut self, handlers: TransportHandlers) -> Result<(), ArrusError> {
         let state = AppState {
             handlers,
-            connections: Arc::new(Mutex::new(HashMap::new())),
+            connections: HashMapConnectionManager::new(),
             socket_counter: Arc::new(Mutex::new(0)),
             config: self.config.clone(),
         };
@@ -191,39 +216,49 @@ async fn websocket_handler(
     headers: HeaderMap,
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> Result<Response, StatusCode> {
-    // Validate connection parameters
-    if let Err(e) = params.validate(&state.config) {
-        if state.config.debug_mode {
-            println!("Connection validation failed: {}", e);
-        }
-        return Err(StatusCode::BAD_REQUEST);
+    let validation_result = validate_connection(&params, &headers, &state.config);
+
+    if let Err(e) = validation_result {
+        log_validation_error(&e, &state.config);
+        return Err(validation_error_to_status_code(&e));
     }
 
-    // Validate origin if present
-    if let Some(origin) = headers.get("origin") {
-        if let Ok(origin_str) = origin.to_str() {
-            if !origin_str.is_empty()
-                && !state
-                    .config
-                    .allowed_origins
-                    .contains(&origin_str.to_string())
-            {
-                if state.config.debug_mode {
-                    println!("Disallowed origin: {}", origin_str);
-                }
-                return Err(StatusCode::FORBIDDEN);
-            }
-        }
-    }
+    log_new_connection(&addr, &params, &state.config);
+    Ok(ws.on_upgrade(move |socket| handle_websocket(socket, params, state)))
+}
 
-    if state.config.debug_mode {
+fn validate_connection(
+    params: &ConnectionParams,
+    headers: &HeaderMap,
+    config: &WebSocketConfig,
+) -> Result<(), ValidationError> {
+    let origin_header = headers.get("origin").and_then(|h| h.to_str().ok());
+
+    params
+        .validate(config)
+        .and_then(|_| config.validate_origin(origin_header))
+}
+
+fn validation_error_to_status_code(error: &ValidationError) -> StatusCode {
+    match error {
+        ValidationError::DisallowedOrigin(_) => StatusCode::FORBIDDEN,
+        _ => StatusCode::BAD_REQUEST,
+    }
+}
+
+fn log_validation_error(error: &ValidationError, config: &WebSocketConfig) {
+    if config.debug_mode {
+        println!("Connection validation failed: {}", error);
+    }
+}
+
+fn log_new_connection(addr: &SocketAddr, params: &ConnectionParams, config: &WebSocketConfig) {
+    if config.debug_mode {
         println!(
             "New WebSocket connection from {}: client_id={}, version={}, encoding={}",
             addr, params.client_id, params.v, params.encoding
         );
     }
-
-    Ok(ws.on_upgrade(move |socket| handle_websocket(socket, params, state)))
 }
 
 async fn handle_websocket(socket: WebSocket, params: ConnectionParams, state: AppState) {
@@ -244,10 +279,7 @@ async fn handle_websocket(socket: WebSocket, params: ConnectionParams, state: Ap
         message_tx: message_tx.clone(),
     };
 
-    {
-        let mut connections = state.connections.lock().await;
-        connections.insert(socket_id, connection_state);
-    }
+    state.connections.insert(socket_id, connection_state).await;
 
     // Create transport connection for RPC server
     let transport_connection = SocketConnection {
@@ -357,10 +389,7 @@ async fn handle_websocket(socket: WebSocket, params: ConnectionParams, state: Ap
     }
 
     // Clean up connection
-    {
-        let mut connections = state.connections.lock().await;
-        connections.remove(&socket_id);
-    }
+    state.connections.remove(socket_id).await;
 
     // Notify RPC server of disconnection
     (state.handlers.on_close)(socket_id);

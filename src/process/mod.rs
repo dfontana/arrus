@@ -6,4 +6,3 @@ pub mod path_processor;
 pub mod scanner;
 
 pub use detector::ProcessDetector;
-pub use error::{DatabaseError, DetectorError, ProcessError};

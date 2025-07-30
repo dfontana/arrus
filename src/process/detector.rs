@@ -4,7 +4,6 @@ use crate::process::{
     activity_manager::ActivityManager, database::GameDatabase, error::DetectorError,
     path_processor::PathProcessor, scanner::ProcessScanner,
 };
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock, mpsc};
@@ -16,32 +15,9 @@ pub struct ProcessDetector {
     database: Arc<RwLock<GameDatabase>>,
     activity_manager: ActivityManager,
     scan_interval: Duration,
-    database_manager: Option<Arc<RwLock<DatabaseManager>>>,
 }
 
 impl ProcessDetector {
-    pub fn new<P: AsRef<Path>>(
-        database_path: P,
-        message_sender: mpsc::UnboundedSender<ActivityMessage>,
-    ) -> Result<Self, DetectorError> {
-        let database = GameDatabase::load_from_file(database_path)?;
-
-        tracing::info!(
-            "Loaded game database with {} total games, {} Linux-compatible",
-            database.len(),
-            database.linux_len()
-        );
-
-        Ok(Self {
-            scanner: ProcessScanner::new(),
-            path_processor: PathProcessor::new(),
-            database: Arc::new(RwLock::new(database)),
-            activity_manager: ActivityManager::new(message_sender),
-            scan_interval: Duration::from_secs(5),
-            database_manager: None,
-        })
-    }
-
     pub async fn new_with_manager(
         message_sender: mpsc::UnboundedSender<ActivityMessage>,
         db_config: Option<DatabaseConfig>,
@@ -51,13 +27,13 @@ impl ProcessDetector {
         // Create database manager
         let mut db_manager = DatabaseManager::new(config.clone())
             .await
-            .map_err(|e| DetectorError::DatabaseError(e.into()))?;
+            .map_err(|e| DetectorError::Database(e.into()))?;
 
         // Initialize database manager
         db_manager
             .initialize()
             .await
-            .map_err(|e| DetectorError::DatabaseError(e.into()))?;
+            .map_err(|e| DetectorError::Database(e.into()))?;
 
         // Load initial database
         let database = if db_manager.get_database_info().await.exists {
@@ -68,7 +44,7 @@ impl ProcessDetector {
             if db_manager.get_database_info().await.exists {
                 GameDatabase::load_from_file(&config.file_paths.database_file)?
             } else {
-                return Err(DetectorError::DatabaseError(
+                return Err(DetectorError::Database(
                     crate::process::error::DatabaseError::LoadError {
                         path: config.file_paths.database_file.display().to_string(),
                         source: serde_json::Error::io(std::io::Error::new(
@@ -92,38 +68,7 @@ impl ProcessDetector {
             database: Arc::new(RwLock::new(database)),
             activity_manager: ActivityManager::new(message_sender),
             scan_interval: Duration::from_secs(5),
-            database_manager: Some(Arc::new(RwLock::new(db_manager))),
         })
-    }
-
-    pub async fn reload_database(&self) -> Result<(), DetectorError> {
-        if let Some(db_manager) = &self.database_manager {
-            let manager = db_manager.read().await;
-            let db_info = manager.get_database_info().await;
-
-            if db_info.exists {
-                let new_database = GameDatabase::load_from_file(&db_info.path)?;
-                *self.database.write().await = new_database;
-
-                tracing::info!(
-                    "Reloaded game database with {} total games, {} Linux-compatible",
-                    self.database.read().await.len(),
-                    self.database.read().await.linux_len()
-                );
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn trigger_database_update(&self) -> Result<(), DetectorError> {
-        if let Some(db_manager) = &self.database_manager {
-            let manager = db_manager.read().await;
-            manager
-                .trigger_manual_update()
-                .await
-                .map_err(|e| DetectorError::DatabaseError(e.into()))?;
-        }
-        Ok(())
     }
 
     pub fn start(mut self) -> JoinHandle<()> {
@@ -191,12 +136,9 @@ impl ProcessDetector {
             scan_duration: duration,
         })
     }
-
-    pub fn set_scan_interval(&mut self, interval: Duration) {
-        self.scan_interval = interval;
-    }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct ScanStats {
     processes_scanned: usize,

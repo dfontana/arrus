@@ -4,6 +4,16 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OperatingSystem {
+    Linux,
+    #[serde(rename = "win32")]
+    Windows,
+    #[serde(rename = "darwin")]
+    MacOS,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GameEntry {
     pub id: String,
@@ -20,7 +30,7 @@ pub struct GameEntry {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExecutableEntry {
     pub name: String,
-    pub os: String,
+    pub os: OperatingSystem,
     #[serde(default)]
     pub is_launcher: bool,
     pub arguments: Option<String>,
@@ -48,7 +58,12 @@ impl GameDatabase {
         // Pre-filter Linux-compatible entries for performance
         let linux_entries = entries
             .iter()
-            .filter(|entry| entry.executables.iter().any(|exec| exec.os == "linux"))
+            .filter(|entry| {
+                entry
+                    .executables
+                    .iter()
+                    .any(|exec| exec.os == OperatingSystem::Linux)
+            })
             .cloned()
             .collect();
 
@@ -63,7 +78,7 @@ impl GameDatabase {
         for entry in &self.linux_entries {
             for executable in &entry.executables {
                 // Skip non-Linux executables
-                if executable.os != "linux" {
+                if executable.os != OperatingSystem::Linux {
                     continue;
                 }
 

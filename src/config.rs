@@ -95,30 +95,3 @@ pub fn load_database_config() -> DatabaseConfig {
 
     config
 }
-
-pub fn print_database_config_help() {
-    println!("Database Configuration Environment Variables:");
-    println!(
-        "  ARRPC_DB_BASE_URL        - Discord API base URL (default: https://discord.com/api/v9)"
-    );
-    println!("  ARRPC_DB_ENDPOINT        - Database endpoint (default: /applications/detectable)");
-    println!("  ARRPC_DB_USER_AGENT      - HTTP User-Agent header (default: arRPC-Rust/1.0)");
-    println!("  ARRPC_DB_TIMEOUT         - HTTP timeout in seconds (default: 30)");
-    println!("  ARRPC_DB_MAX_RETRIES     - Maximum retry attempts (default: 3)");
-    println!();
-    println!("  ARRPC_DB_FILE           - Database file path (default: ./data/detectable.json)");
-    println!("  ARRPC_DB_BACKUP_DIR     - Backup directory (default: ./data/backups)");
-    println!("  ARRPC_DB_TEMP_DIR       - Temporary directory (default: ./data/temp)");
-    println!();
-    println!("  ARRPC_DB_AUTO_UPDATES   - Enable automatic updates (default: true)");
-    println!("  ARRPC_DB_UPDATE_INTERVAL - Update interval in hours (default: 24)");
-    println!("  ARRPC_DB_STARTUP_DELAY  - Startup delay in minutes (default: 5)");
-    println!();
-    println!("  ARRPC_DB_STRICT_MODE    - Strict validation mode (default: false)");
-    println!("  ARRPC_DB_MAX_SIZE       - Maximum database size in bytes (default: 10485760)");
-    println!("  ARRPC_DB_MIN_GAMES      - Minimum game count (default: 1000)");
-    println!();
-    println!("  ARRPC_DB_MAX_BACKUPS    - Maximum backup count (default: 10)");
-    println!("  ARRPC_DB_COMPRESS_BACKUPS - Compress backups (default: true)");
-    println!("  ARRPC_DB_BACKUP_ON_UPDATE - Backup before updates (default: true)");
-}

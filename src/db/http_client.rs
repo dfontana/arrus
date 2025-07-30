@@ -2,6 +2,7 @@ use crate::db::error::{DatabaseError, Result};
 use reqwest::{Client, StatusCode};
 use std::time::Duration;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct DatabaseResponse {
     pub data: Vec<u8>,
@@ -11,6 +12,7 @@ pub struct DatabaseResponse {
     pub status: StatusCode,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
     pub base_url: String,
@@ -36,11 +38,13 @@ impl Default for HttpConfig {
     }
 }
 
+#[allow(dead_code)]
 pub struct HttpClient {
     client: Client,
     config: HttpConfig,
 }
 
+#[allow(dead_code)]
 impl HttpClient {
     pub fn new(config: HttpConfig) -> Result<Self> {
         let client = Client::builder()

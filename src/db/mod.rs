@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod error;
 pub mod file_manager;
 pub mod http_client;

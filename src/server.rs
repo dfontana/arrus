@@ -127,7 +127,7 @@ impl RpcServer {
             if let Some(info) = socket_info {
                 // Emit activity clear event
                 let _ = event_tx.send(RpcEvent::Activity {
-                    activity: None,
+                    activity: Box::new(None),
                     pid: info.last_pid,
                     socket_id: socket_id.to_string(),
                 });
@@ -216,7 +216,7 @@ impl RpcServer {
     /// Forward activity to bridge server
     async fn forward_activity(
         &self,
-        activity: Option<ProcessedActivity>,
+        activity: Box<Option<ProcessedActivity>>,
         _pid: Option<u32>,
         _socket_id: String,
     ) -> Result<(), ArrusError> {

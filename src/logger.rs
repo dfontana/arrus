@@ -25,12 +25,6 @@ impl Logger {
         eprintln!("{} ERROR: {}", self.prefix, message);
     }
 
-    pub fn debug(&self, message: &str) {
-        if std::env::var("ARRPC_DEBUG").is_ok() {
-            println!("{} DEBUG: {}", self.prefix, message);
-        }
-    }
-
     fn rgb(r: u8, g: u8, b: u8, text: &str) -> String {
         format!("\x1b[38;2;{};{};{}m{}", r, g, b, text)
     }

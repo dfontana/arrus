@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum BridgeError {
     #[error("Invalid port configuration: {0}")]
@@ -21,6 +22,7 @@ pub enum BridgeError {
     ClientError(std::io::Error),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum ArrusError {
     #[error("Socket {0} not found")]

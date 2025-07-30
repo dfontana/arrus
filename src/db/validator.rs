@@ -1,5 +1,5 @@
 use crate::db::error::Result;
-use crate::process::database::{ExecutableEntry, GameEntry};
+use crate::process::database::{ExecutableEntry, GameEntry, OperatingSystem};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
@@ -10,7 +10,7 @@ pub struct ValidationResult {
     pub stats: ValidationStats,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ValidationStats {
     pub total_games: usize,
     pub linux_games: usize,
@@ -18,19 +18,6 @@ pub struct ValidationStats {
     pub macos_games: usize,
     pub games_with_launchers: usize,
     pub unique_executables: usize,
-}
-
-impl Default for ValidationStats {
-    fn default() -> Self {
-        Self {
-            total_games: 0,
-            linux_games: 0,
-            windows_games: 0,
-            macos_games: 0,
-            games_with_launchers: 0,
-            unique_executables: 0,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -295,14 +282,7 @@ impl DatabaseValidator {
                 });
             }
 
-            if !["linux", "win32", "darwin"].contains(&executable.os.as_str()) {
-                errors.push(ValidationError::InvalidExecutable {
-                    game_index: index,
-                    game_id: game.id.clone(),
-                    executable_index: exe_index,
-                    error: format!("Invalid OS: {}", executable.os),
-                });
-            }
+            // OS validation is now handled by the enum type system - no need for explicit validation
         }
     }
 
@@ -333,7 +313,10 @@ impl DatabaseValidator {
             }
 
             // Check for Linux executables (for our use case)
-            let has_linux_executable = game.executables.iter().any(|exe| exe.os == "linux");
+            let has_linux_executable = game
+                .executables
+                .iter()
+                .any(|exe| exe.os == OperatingSystem::Linux);
 
             if !has_linux_executable {
                 warnings.push(ValidationWarning::NoLinuxExecutable {
@@ -359,11 +342,10 @@ impl DatabaseValidator {
             for executable in &game.executables {
                 unique_executables.insert(&executable.name);
 
-                match executable.os.as_str() {
-                    "linux" => has_linux = true,
-                    "win32" => has_windows = true,
-                    "darwin" => has_macos = true,
-                    _ => {}
+                match executable.os {
+                    OperatingSystem::Linux => has_linux = true,
+                    OperatingSystem::Windows => has_windows = true,
+                    OperatingSystem::MacOS => has_macos = true,
                 }
 
                 if executable.is_launcher {
