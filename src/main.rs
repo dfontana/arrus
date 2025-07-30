@@ -3,11 +3,13 @@ mod bridge;
 mod error;
 mod logger;
 mod server;
+mod transports;
 
 use activity::{ActivityData, ActivityMessage, ActivityTimestamps};
 use bridge::BridgeServer;
 use logger::Logger;
 use server::RpcServer;
+use transports::WebSocketTransport;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,6 +22,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize RPC server
     let rpc_server = RpcServer::new();
+    let transport_handlers = rpc_server.get_transport_handlers();
+
+    // Initialize WebSocket transport
+    let mut websocket_transport = WebSocketTransport::new();
 
     // Start bridge server
     let bridge_handle = tokio::spawn(async move {
@@ -32,6 +38,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rpc_handle = tokio::spawn(async move {
         if let Err(e) = rpc_server.run().await {
             eprintln!("RPC server error: {}", e);
+        }
+    });
+
+    // Start WebSocket transport
+    let websocket_handle = tokio::spawn(async move {
+        if let Err(e) = websocket_transport.start(transport_handlers).await {
+            eprintln!("WebSocket transport error: {}", e);
         }
     });
 
@@ -78,6 +91,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ = rpc_handle => {
             logger.error("RPC server exited");
+        }
+        _ = websocket_handle => {
+            logger.error("WebSocket transport exited");
         }
         _ = tokio::signal::ctrl_c() => {
             logger.info("Shutting down");
