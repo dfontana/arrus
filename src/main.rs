@@ -1,5 +1,7 @@
 mod activity;
 mod bridge;
+mod config;
+mod db;
 mod error;
 mod logger;
 mod process;
@@ -7,6 +9,7 @@ mod server;
 mod transports;
 
 use bridge::BridgeServer;
+use config::load_database_config;
 use logger::Logger;
 use process::ProcessDetector;
 use server::RpcServer;
@@ -28,8 +31,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize WebSocket transport
     let mut websocket_transport = WebSocketTransport::new();
 
-    // Initialize process detector
-    let process_detector = ProcessDetector::new("detectable.json", sender.clone())?;
+    // Initialize process detector with database manager
+    let db_config = load_database_config();
+    let process_detector =
+        ProcessDetector::new_with_manager(sender.clone(), Some(db_config)).await?;
 
     // Start bridge server
     let bridge_handle = tokio::spawn(async move {

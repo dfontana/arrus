@@ -1,10 +1,10 @@
 use crate::process::error::DatabaseError;
 use crate::process::path_processor::ProcessedPath;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GameEntry {
     pub id: String,
     pub name: String,
@@ -17,7 +17,7 @@ pub struct GameEntry {
     pub overlay: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExecutableEntry {
     pub name: String,
     pub os: String,

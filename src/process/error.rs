@@ -25,6 +25,9 @@ pub enum DatabaseError {
 
     #[error("IO error: {0}")]
     IoError(#[from] io::Error),
+
+    #[error("Database manager error: {0}")]
+    ManagerError(#[from] crate::db::DatabaseError),
 }
 
 #[derive(Debug, thiserror::Error)]
