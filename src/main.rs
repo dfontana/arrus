@@ -2,12 +2,13 @@ mod activity;
 mod bridge;
 mod error;
 mod logger;
+mod process;
 mod server;
 mod transports;
 
-use activity::{ActivityData, ActivityMessage, ActivityTimestamps};
 use bridge::BridgeServer;
 use logger::Logger;
+use process::ProcessDetector;
 use server::RpcServer;
 use transports::WebSocketTransport;
 
@@ -26,6 +27,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize WebSocket transport
     let mut websocket_transport = WebSocketTransport::new();
+
+    // Initialize process detector
+    let process_detector = ProcessDetector::new("detectable.json", sender.clone())?;
 
     // Start bridge server
     let bridge_handle = tokio::spawn(async move {
@@ -48,42 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Test activity after brief delay
-    tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-        let test_activity = ActivityMessage {
-            socket_id: "test-socket".to_string(),
-            activity: Some(ActivityData {
-                application_id: "123456789".to_string(),
-                name: "Test Game".to_string(),
-                details: Some("In a test level".to_string()),
-                state: Some("Playing".to_string()),
-                timestamps: Some(ActivityTimestamps {
-                    start: Some(
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                    ),
-                    end: None,
-                }),
-                assets: None,
-                party: None,
-                secrets: None,
-                instance: None,
-                flags: None,
-                buttons: None,
-                metadata: None,
-                activity_type: 0,
-            }),
-            pid: Some(12345),
-        };
-
-        if let Err(e) = sender.send(test_activity) {
-            eprintln!("Failed to send test activity: {}", e);
-        }
-    });
+    // Start process detector
+    let process_handle = process_detector.start();
 
     tokio::select! {
         _ = bridge_handle => {
@@ -94,6 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ = websocket_handle => {
             logger.error("WebSocket transport exited");
+        }
+        _ = process_handle => {
+            logger.error("Process detector exited");
         }
         _ = tokio::signal::ctrl_c() => {
             logger.info("Shutting down");
