@@ -40,4 +40,32 @@ pub enum ArrusError {
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+
+    // IPC Transport errors
+    #[error("Invalid packet type: {0}")]
+    InvalidPacketType(u32),
+
+    #[error("Insufficient data in buffer")]
+    InsufficientData,
+
+    #[error("Missing field: {0}")]
+    MissingField(String),
+
+    #[error("Invalid version: {0}")]
+    InvalidVersion(u64),
+
+    #[error("Unsupported version: {0}")]
+    UnsupportedVersion(u8),
+
+    #[error("Missing client_id")]
+    MissingClientId,
+
+    #[error("Socket path not available")]
+    SocketPathNotAvailable,
+
+    #[error("UTF-8 conversion error: {0}")]
+    Utf8Error(#[from] std::str::Utf8Error),
+
+    #[error("IO string error: {0}")]
+    Io(String),
 }
