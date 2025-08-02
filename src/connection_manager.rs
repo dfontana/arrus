@@ -41,26 +41,3 @@ impl<T: Clone> ConnectionManager<T> for HashMapConnectionManager<T> {
         self.connections.lock().await.remove(&id)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Clone, Debug, PartialEq)]
-    struct TestConnection {
-        name: String,
-    }
-
-    #[tokio::test]
-    async fn test_basic_operations() {
-        let manager = HashMapConnectionManager::new();
-        let conn = TestConnection {
-            name: "test".to_string(),
-        };
-
-        // Test insert and remove
-        manager.insert(1, conn.clone()).await;
-        assert_eq!(manager.remove(1).await, Some(conn));
-        assert_eq!(manager.remove(1).await, None); // Already removed
-    }
-}

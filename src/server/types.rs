@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,23 +14,6 @@ pub type ActiveSockets = Arc<Mutex<HashMap<u32, SocketInfo>>>;
 /// Event channel for internal communication
 pub type EventSender = mpsc::UnboundedSender<RpcEvent>;
 pub type EventReceiver = mpsc::UnboundedReceiver<RpcEvent>;
-
-/// RPC Server configuration
-#[derive(Debug, Clone)]
-pub struct RpcConfig {
-    pub disable_process_scanning: bool,
-    pub debug_mode: bool,
-}
-
-impl Default for RpcConfig {
-    fn default() -> Self {
-        Self {
-            disable_process_scanning: std::env::args().any(|arg| arg == "--no-process-scanning")
-                || std::env::var("ARRPC_NO_PROCESS_SCANNING").is_ok(),
-            debug_mode: std::env::var("ARRPC_DEBUG").is_ok(),
-        }
-    }
-}
 
 /// Transport type identification
 #[derive(Clone, Debug)]
@@ -334,12 +315,8 @@ pub struct DeepLinkArgs {
     pub params: String,
 }
 
-/// Callback types for browser operations
-pub type InviteCallback = Arc<dyn Fn(bool) + Send + Sync>;
-pub type TemplateCallback = Arc<dyn Fn(bool) + Send + Sync>;
-
 /// Events emitted by the RPC server
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum RpcEvent {
     Connection {
         socket_id: u32,
@@ -357,64 +334,6 @@ pub enum RpcEvent {
         pid: Option<u32>,
         socket_id: String,
     },
-    Invite {
-        code: String,
-        callback: InviteCallback,
-    },
-    GuildTemplate {
-        code: String,
-        callback: TemplateCallback,
-    },
-    DeepLink {
-        params: String,
-    },
-}
-
-impl std::fmt::Debug for RpcEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RpcEvent::Connection {
-                socket_id,
-                socket_info,
-            } => f
-                .debug_struct("Connection")
-                .field("socket_id", socket_id)
-                .field("socket_info", socket_info)
-                .finish(),
-            RpcEvent::Disconnection { socket_id } => f
-                .debug_struct("Disconnection")
-                .field("socket_id", socket_id)
-                .finish(),
-            RpcEvent::Message { socket_id, request } => f
-                .debug_struct("Message")
-                .field("socket_id", socket_id)
-                .field("request", request)
-                .finish(),
-            RpcEvent::Activity {
-                activity,
-                pid,
-                socket_id,
-            } => f
-                .debug_struct("Activity")
-                .field("activity", activity)
-                .field("pid", pid)
-                .field("socket_id", socket_id)
-                .finish(),
-            RpcEvent::Invite { code, .. } => f
-                .debug_struct("Invite")
-                .field("code", code)
-                .field("callback", &"<callback>")
-                .finish(),
-            RpcEvent::GuildTemplate { code, .. } => f
-                .debug_struct("GuildTemplate")
-                .field("code", code)
-                .field("callback", &"<callback>")
-                .finish(),
-            RpcEvent::DeepLink { params } => {
-                f.debug_struct("DeepLink").field("params", params).finish()
-            }
-        }
-    }
 }
 
 /// Transport handlers for different connection types

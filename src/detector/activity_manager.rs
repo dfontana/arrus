@@ -3,6 +3,7 @@ use crate::database::GameEntry;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
+use tracing::{error, info};
 
 #[derive(Debug)]
 struct ActiveGame {
@@ -66,7 +67,7 @@ impl ActivityManager {
             start_timestamp: now,
         };
 
-        tracing::info!("Game detected: {} (PID: {})", game.name, pid);
+        info!("Game detected: {} (PID: {})", game.name, pid);
 
         self.active_games.insert(game.id.clone(), active_game);
         self.send_activity_for_game(&game.id, Some(pid));
@@ -74,7 +75,7 @@ impl ActivityManager {
 
     fn handle_lost_game(&mut self, game_id: &str) {
         if let Some(active_game) = self.active_games.remove(game_id) {
-            tracing::info!("Game lost: {}", active_game.game_name);
+            info!("Game lost: {}", active_game.game_name);
 
             // Send clear activity message
             let message = ActivityMessage {
@@ -84,7 +85,7 @@ impl ActivityManager {
             };
 
             if let Err(e) = self.message_sender.send(message) {
-                tracing::error!("Failed to send clear activity message: {}", e);
+                error!("Failed to send clear activity message: {}", e);
             }
         }
     }
@@ -117,7 +118,7 @@ impl ActivityManager {
             };
 
             if let Err(e) = self.message_sender.send(message) {
-                tracing::error!("Failed to send activity message: {}", e);
+                error!("Failed to send activity message: {}", e);
             }
         }
     }

@@ -1,8 +1,5 @@
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ProcessedPath {
-    pub original: String,
-    pub normalized: String,
     pub variants: Vec<String>,
 }
 
@@ -16,12 +13,7 @@ impl PathProcessor {
     pub fn process_path(&self, path: &str) -> ProcessedPath {
         let normalized = self.normalize_path(path);
         let variants = self.generate_variants(&normalized);
-
-        ProcessedPath {
-            original: path.to_string(),
-            normalized,
-            variants,
-        }
+        ProcessedPath { variants }
     }
 
     fn normalize_path(&self, path: &str) -> String {
@@ -72,11 +64,5 @@ impl PathProcessor {
         variants.retain(|v| seen.insert(v.clone()));
 
         variants
-    }
-}
-
-impl Default for PathProcessor {
-    fn default() -> Self {
-        Self::new()
     }
 }

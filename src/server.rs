@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 mod handlers;
-mod protocol;
 mod types;
 
 use handlers::*;
-use protocol::*;
+use std::sync::Arc;
+use tracing::{error, info};
 pub use types::*;
 
 /// Main RPC server structure
@@ -14,21 +12,17 @@ pub struct RpcServer {
     active_sockets: ActiveSockets,
     event_tx: EventSender,
     event_rx: EventReceiver,
-    config: RpcConfig,
 }
 
 impl RpcServer {
     /// Create a new RPC server instance
     pub fn new() -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
-        let config = RpcConfig::default();
-
         RpcServer {
             socket_counter: Arc::new(std::sync::Mutex::new(0)),
             active_sockets: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             event_tx,
             event_rx,
-            config,
         }
     }
 
@@ -58,14 +52,32 @@ impl RpcServer {
             // Send Discord READY event
             let ready_message = RpcMessage {
                 cmd: RpcCommand::Dispatch,
-                data: Some(create_ready_payload()),
+                data: Some(serde_json::json!({
+                    "v": 1,
+                    "config": serde_json::json!({
+                        "cdn_host": "cdn.discordapp.com",
+                        "api_endpoint": "//discord.com/api",
+                        "environment": "production"
+                    }),
+                    "user": serde_json::json!({
+                        "id": "1045800378228281345",
+                        "username": "arrpc",
+                        "discriminator": "0",
+                        "global_name": "arRPC",
+                        "avatar": "cfefa4d9839fb4bdf030f91c2a13e95c",
+                        "avatar_decoration_data": null,
+                        "bot": false,
+                        "flags": 0,
+                        "premium_type": 0
+                    })
+                })),
                 evt: Some(RpcEventType::Ready),
                 nonce: None,
             };
 
             // Send ready message
             if let Err(e) = socket.send(ready_message) {
-                eprintln!("Failed to send READY message: {e}");
+                error!("Failed to send READY message: {e}");
                 return;
             }
 
@@ -105,7 +117,7 @@ impl RpcServer {
 
             // Process specific commands
             if let Err(e) = process_command(socket_id, request, &active_sockets, &event_tx) {
-                eprintln!("Error processing command: {e}");
+                error!("Error processing command: {e}");
             }
         })
     }
@@ -138,14 +150,12 @@ impl RpcServer {
 
     /// Run the RPC server event loop
     pub async fn run(mut self) -> Result<(), anyhow::Error> {
-        println!("RPC Server started");
-
+        info!("RPC Server started");
         while let Some(event) = self.event_rx.recv().await {
             if let Err(e) = self.handle_event(event).await {
-                eprintln!("Error handling event: {e}");
+                error!("Error handling event: {e}");
             }
         }
-
         Ok(())
     }
 
@@ -156,55 +166,21 @@ impl RpcServer {
                 socket_id,
                 socket_info,
             } => {
-                if self.config.debug_mode {
-                    println!("New connection: {} ({})", socket_id, socket_info.client_id);
-                }
+                info!("New connection: {} ({})", socket_id, socket_info.client_id);
             }
-
             RpcEvent::Disconnection { socket_id } => {
-                if self.config.debug_mode {
-                    println!("Connection closed: {socket_id}");
-                }
+                info!("Connection closed: {socket_id}");
             }
-
             RpcEvent::Message { socket_id, request } => {
-                if self.config.debug_mode {
-                    println!("Message from {socket_id}: {request:?}");
-                }
+                info!("Message from {socket_id}: {request:?}");
             }
-
             RpcEvent::Activity {
                 activity,
                 pid,
                 socket_id,
             } => {
-                if self.config.debug_mode {
-                    println!("Activity update: socket={socket_id}, pid={pid:?}");
-                }
+                info!("Activity update: socket={socket_id}, pid={pid:?}");
                 self.forward_activity(activity, pid, socket_id).await?;
-            }
-
-            RpcEvent::Invite { code, callback } => {
-                if self.config.debug_mode {
-                    println!("Invite browser request: {code}");
-                }
-                let is_valid = self.validate_invite(&code).await?;
-                callback(is_valid);
-            }
-
-            RpcEvent::GuildTemplate { code, callback } => {
-                if self.config.debug_mode {
-                    println!("Guild template browser request: {code}");
-                }
-                let is_valid = self.validate_guild_template(&code).await?;
-                callback(is_valid);
-            }
-
-            RpcEvent::DeepLink { params } => {
-                if self.config.debug_mode {
-                    println!("Deep link: {params}");
-                }
-                self.handle_deep_link_event(params).await?;
             }
         }
 
@@ -218,31 +194,8 @@ impl RpcServer {
         _pid: Option<u32>,
         _socket_id: String,
     ) -> Result<(), anyhow::Error> {
-        if self.config.debug_mode {
-            println!("Forwarding activity: {activity:?}");
-        }
+        info!("Forwarding activity: {activity:?}");
         // TODO: Integrate with bridge server
-        Ok(())
-    }
-
-    /// Validate invite code (stub implementation)
-    async fn validate_invite(&self, _code: &str) -> Result<bool, anyhow::Error> {
-        // TODO: Implement actual validation against Discord API
-        Ok(true)
-    }
-
-    /// Validate guild template code (stub implementation)
-    async fn validate_guild_template(&self, _code: &str) -> Result<bool, anyhow::Error> {
-        // TODO: Implement actual validation against Discord API
-        Ok(true)
-    }
-
-    /// Handle deep link event (stub implementation)
-    async fn handle_deep_link_event(&self, params: String) -> Result<(), anyhow::Error> {
-        if self.config.debug_mode {
-            println!("Processing deep link: {params}");
-        }
-        // TODO: Implement deep link handling
         Ok(())
     }
 }

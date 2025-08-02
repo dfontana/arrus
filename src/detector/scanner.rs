@@ -72,9 +72,3 @@ impl ProcessScanner {
         (executable, arguments)
     }
 }
-
-impl Default for ProcessScanner {
-    fn default() -> Self {
-        Self::new()
-    }
-}

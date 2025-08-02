@@ -3,14 +3,14 @@ mod bridge;
 mod config;
 mod connection_manager;
 mod database;
-mod process;
+mod detector;
 mod server;
 mod transports;
 
 use bridge::BridgeServer;
 use config::load_database_config;
+use detector::ProcessDetector;
 use kitchen_sink::logging;
-use process::ProcessDetector;
 use server::RpcServer;
 use tracing::{error, info};
 use transports::WebSocketTransport;
@@ -18,6 +18,22 @@ use transports::WebSocketTransport;
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     logging::initalize_logging();
+
+    /*
+    DB calls discord to enumerate viable games
+    -> Detector scans on loop looking for game matches
+    -> Detector sends matched game activity to Bridge
+
+    Bridge
+    -> Broadcasts activity to subscribers on it's own websocket connections
+      -> Both pre-existing when new connection is made
+      -> And new as activity comes in
+
+    // TODO: What do these things do tho?
+    RPC -> (Not fully impl'd) Sends activity to Bridge, but not clear from what?
+    Transports -> Websocket?? IPC?? Who are these for?
+    */
+
     // Initialize bridge server
     let bridge_server = BridgeServer::new()?;
     let sender = bridge_server.get_sender();

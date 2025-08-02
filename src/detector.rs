@@ -1,15 +1,19 @@
-use super::path_processor::ProcessedPath;
+mod activity_manager;
+mod path_processor;
+mod scanner;
+
 use crate::activity::ActivityMessage;
 use crate::database::{
     DatabaseConfig, ExecutableEntry, GameDatabase, GameEntry, OperatingSystem, store,
 };
-use crate::process::{
-    activity_manager::ActivityManager, path_processor::PathProcessor, scanner::ProcessScanner,
-};
+use activity_manager::ActivityManager;
 use kitchen_sink::simple_store::Store;
-use std::time::Duration;
+use path_processor::{PathProcessor, ProcessedPath};
+use scanner::ProcessScanner;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tracing::{debug, error};
 
 pub struct ProcessDetector {
     database: Store<GameDatabase>,
@@ -37,42 +41,21 @@ impl ProcessDetector {
 
     pub fn start(mut self) -> JoinHandle<()> {
         tokio::spawn(async move {
-            self.run_detection_loop().await;
+            let mut interval = tokio::time::interval(self.scan_interval);
+            loop {
+                interval.tick().await;
+                if let Err(e) = self.scan_cycle().await {
+                    error!("Scan cycle failed: {}", e);
+                }
+            }
         })
     }
 
-    async fn run_detection_loop(&mut self) {
-        let mut interval = tokio::time::interval(self.scan_interval);
-        tracing::info!(
-            "Process detection started, scanning every {:?}",
-            self.scan_interval
-        );
-
-        loop {
-            interval.tick().await;
-
-            match self.scan_cycle().await {
-                Ok(stats) => {
-                    tracing::debug!(
-                        "Scan completed: {} processes, {} games detected",
-                        stats.processes_scanned,
-                        stats.games_detected
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("Scan cycle failed: {}", e);
-                    // Continue running despite errors
-                }
-            }
-        }
-    }
-
-    async fn scan_cycle(&mut self) -> Result<ScanStats, anyhow::Error> {
-        let start_time = std::time::Instant::now();
+    async fn scan_cycle(&mut self) -> Result<(), anyhow::Error> {
+        let start_time = Instant::now();
 
         // Get all running processes
         let processes = self.scanner.scan_processes()?;
-        let process_count = processes.len();
 
         // Find matching games
         let mut detected_games = Vec::new();
@@ -86,19 +69,13 @@ impl ProcessDetector {
             }
         }
 
-        let game_count = detected_games.len();
-
         // Update activity manager with detected games
         self.activity_manager.update_detected_games(detected_games);
 
         let duration = start_time.elapsed();
-        tracing::debug!("Scan took {:?}", duration);
+        debug!("Scan took {:?}", duration);
 
-        Ok(ScanStats {
-            processes_scanned: process_count,
-            games_detected: game_count,
-            scan_duration: duration,
-        })
+        Ok(())
     }
 }
 
@@ -168,12 +145,4 @@ impl Matcher {
 
         true
     }
-}
-
-#[allow(dead_code)]
-#[derive(Debug)]
-struct ScanStats {
-    processes_scanned: usize,
-    games_detected: usize,
-    scan_duration: Duration,
 }
