@@ -1,7 +1,9 @@
 use anyhow::Context;
+use derive_more::{Display, FromStr, TryFrom};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
@@ -34,40 +36,13 @@ pub struct SocketInfo {
 }
 
 /// RPC event types
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Display, FromStr, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RpcEventType {
-    Ready,
-    Error,
+    READY,
+    ERROR,
     #[serde(other)]
-    Other,
-}
-
-impl std::fmt::Display for RpcEventType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            RpcEventType::Ready => "READY",
-            RpcEventType::Error => "ERROR",
-            RpcEventType::Other => "OTHER",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl From<&str> for RpcEventType {
-    fn from(s: &str) -> Self {
-        match s {
-            "READY" => RpcEventType::Ready,
-            "ERROR" => RpcEventType::Error,
-            _ => RpcEventType::Other,
-        }
-    }
-}
-
-impl From<String> for RpcEventType {
-    fn from(s: String) -> Self {
-        RpcEventType::from(s.as_str())
-    }
+    OTHER,
 }
 
 /// RPC message structure following Discord protocol
@@ -90,55 +65,25 @@ where
 }
 
 /// RPC command types
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Display, FromStr, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RpcCommand {
-    Dispatch,
-    ConnectionsCallback,
-    SetActivity,
-    GuildTemplateBrowser,
-    InviteBrowser,
-    DeepLink,
+    DISPATCH,
+    #[allow(non_camel_case_types)]
+    CONNECTIONS_CALLBACK,
+    #[allow(non_camel_case_types)]
+    SET_ACTIVITY,
+    #[allow(non_camel_case_types)]
+    GUILD_TEMPLATE_BROWSER,
+    #[allow(non_camel_case_types)]
+    INVITE_BROWSER,
+    #[allow(non_camel_case_types)]
+    DEEP_LINK,
     #[serde(other)]
-    Unknown,
+    UNKNOWN,
 }
 
-impl std::fmt::Display for RpcCommand {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            RpcCommand::Dispatch => "DISPATCH",
-            RpcCommand::ConnectionsCallback => "CONNECTIONS_CALLBACK",
-            RpcCommand::SetActivity => "SET_ACTIVITY",
-            RpcCommand::GuildTemplateBrowser => "GUILD_TEMPLATE_BROWSER",
-            RpcCommand::InviteBrowser => "INVITE_BROWSER",
-            RpcCommand::DeepLink => "DEEP_LINK",
-            RpcCommand::Unknown => "UNKNOWN",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl From<&str> for RpcCommand {
-    fn from(s: &str) -> Self {
-        match s {
-            "DISPATCH" => RpcCommand::Dispatch,
-            "CONNECTIONS_CALLBACK" => RpcCommand::ConnectionsCallback,
-            "SET_ACTIVITY" => RpcCommand::SetActivity,
-            "GUILD_TEMPLATE_BROWSER" => RpcCommand::GuildTemplateBrowser,
-            "INVITE_BROWSER" => RpcCommand::InviteBrowser,
-            "DEEP_LINK" => RpcCommand::DeepLink,
-            _ => RpcCommand::Unknown,
-        }
-    }
-}
-
-impl From<String> for RpcCommand {
-    fn from(s: String) -> Self {
-        RpcCommand::from(s.as_str())
-    }
-}
-
-/// RPC request structure
+// RPC request structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcRequest {
     #[serde(deserialize_with = "deserialize_command")]
@@ -152,11 +97,12 @@ where
     D: serde::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    Ok(RpcCommand::from(s))
+    RpcCommand::from_str(&s).map_err(|e| serde::de::Error::custom(format!("{}", e)))
 }
 
 /// Activity type enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, TryFrom, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[try_from(repr)]
 #[repr(u8)]
 pub enum ActivityType {
     #[default]
@@ -166,20 +112,6 @@ pub enum ActivityType {
     Watching = 3,
     Custom = 4,
     Competing = 5,
-}
-
-impl From<u8> for ActivityType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => ActivityType::Playing,
-            1 => ActivityType::Streaming,
-            2 => ActivityType::Listening,
-            3 => ActivityType::Watching,
-            4 => ActivityType::Custom,
-            5 => ActivityType::Competing,
-            _ => ActivityType::Playing,
-        }
-    }
 }
 
 impl From<ActivityType> for u8 {
@@ -227,8 +159,10 @@ mod activity_type_serde {
     where
         D: Deserializer<'de>,
     {
-        let value = Option::<u8>::deserialize(deserializer)?;
-        Ok(value.map(ActivityType::from))
+        Option::<u8>::deserialize(deserializer)?
+            .map(ActivityType::try_from)
+            .transpose()
+            .map_err(|e| serde::de::Error::custom(format!("{}", e)))
     }
 }
 
@@ -334,14 +268,6 @@ pub enum RpcEvent {
         pid: Option<u32>,
         socket_id: String,
     },
-}
-
-/// Transport handlers for different connection types
-#[derive(Clone)]
-pub struct TransportHandlers {
-    pub on_connection: Arc<dyn Fn(SocketConnection) + Send + Sync>,
-    pub on_message: Arc<dyn Fn(u32, RpcRequest) + Send + Sync>,
-    pub on_close: Arc<dyn Fn(u32) + Send + Sync>,
 }
 
 /// Socket connection abstraction

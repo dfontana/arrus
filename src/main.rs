@@ -11,7 +11,6 @@ use bridge::BridgeServer;
 use config::load_database_config;
 use detector::ProcessDetector;
 use kitchen_sink::logging;
-use server::RpcServer;
 use tracing::{error, info};
 use transports::WebSocketTransport;
 
@@ -28,6 +27,14 @@ async fn main() -> Result<(), anyhow::Error> {
     -> Broadcasts activity to subscribers on it's own websocket connections
       -> Both pre-existing when new connection is made
       -> And new as activity comes in
+    -> Reference impl only has this operate for webapp; should sniff vesktop to see what it uses
+       but any RPC activity events are forwarded to bridge (as described above). So likely not
+       a needed component
+       -> This also means IPC server may not be needed which would be nice b/c websocket looks
+          simpler. Websocket and IPC both exist together at the same time though. If bridge is
+          for webapp, why is Websocket+IPC both needed? Diff client types? What does vesktop use?
+       -> IPC is the formal protocol for apps to speak to the discord desktop app (like spotify for ex)
+       -> Websocket
 
     // TODO: What do these things do tho?
     RPC -> (Not fully impl'd) Sends activity to Bridge, but not clear from what?
@@ -39,11 +46,11 @@ async fn main() -> Result<(), anyhow::Error> {
     let sender = bridge_server.get_sender();
 
     // Initialize RPC server
-    let rpc_server = RpcServer::new();
-    let transport_handlers = rpc_server.get_transport_handlers();
-
-    // Initialize WebSocket transport
-    let mut websocket_transport = WebSocketTransport::new();
+    // TODO -> RPC server should be shared logic between WS/IPC which they both
+    // call after their own logic for OnConn/OnMsg/OnClose. Start both of them
+    // here or a factory returning both handles
+    let ipc_rpc = RpcServer::new();
+    let mut ws_rpc = WebSocketTransport::new();
 
     // Initialize process detector with database manager
     let db_config = load_database_config();
@@ -57,16 +64,14 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     });
 
-    // Start RPC server
+    // Start RPC servers
     let rpc_handle = tokio::spawn(async move {
-        if let Err(e) = rpc_server.run().await {
+        if let Err(e) = ipc_rpc.run().await {
             eprintln!("RPC server error: {e}");
         }
     });
-
-    // Start WebSocket transport
     let websocket_handle = tokio::spawn(async move {
-        if let Err(e) = websocket_transport.start(transport_handlers).await {
+        if let Err(e) = ws_rpc.start().await {
             eprintln!("WebSocket transport error: {e}");
         }
     });

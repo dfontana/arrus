@@ -17,7 +17,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::connection_manager::{ConnectionManager, HashMapConnectionManager};
-use crate::server::{RpcMessage, RpcRequest, SocketConnection, TransportHandlers, TransportType};
+use crate::server::{RpcMessage, RpcRequest, SocketConnection, TransportType};
 
 const PORT_RANGE: (u16, u16) = (6463, 6472);
 const BIND_ADDRESS: &str = "127.0.0.1";
@@ -115,7 +115,6 @@ struct ConnectionState {
 
 #[derive(Clone)]
 struct AppState {
-    handlers: TransportHandlers,
     connections: HashMapConnectionManager<ConnectionState>,
     socket_counter: Arc<Mutex<u32>>,
     config: WebSocketConfig,
@@ -134,9 +133,8 @@ impl WebSocketTransport {
         }
     }
 
-    pub async fn start(&mut self, handlers: TransportHandlers) -> Result<(), anyhow::Error> {
+    pub async fn start(&mut self) -> Result<(), anyhow::Error> {
         let state = AppState {
-            handlers,
             connections: HashMapConnectionManager::new(),
             socket_counter: Arc::new(Mutex::new(0)),
             config: self.config.clone(),
