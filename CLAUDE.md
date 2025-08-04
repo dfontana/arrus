@@ -1,0 +1,4 @@
+- Always address the feedback of `cargo clippy` after making code changes
+- Always run `cargo fmt` as the final step of code changes
+- Always use Enums when working with discrete types, instead of matching on strings
+- When translating code from other languages, ALWAYS follow idiomatic rust. This may require redesigning how the reference is implemented to meet rust standards. Regardless of what your plans say, this rule should be followed
