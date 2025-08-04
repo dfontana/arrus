@@ -1,60 +1,98 @@
-use serde::{Deserialize, Serialize};
+mod types;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivityMessage {
-    #[serde(rename = "socketId")]
-    pub socket_id: String,
-    pub activity: Option<ActivityData>,
-    pub pid: Option<u32>,
+use crate::database::GameEntry;
+use anyhow::{Context, anyhow};
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc;
+use tracing::{debug, error, info, instrument};
+pub use types::*;
+
+pub struct ActivityManager {
+    active_games: HashMap<String, ActiveGame>,
+    message_sender: mpsc::UnboundedSender<ActivityMessage>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivityData {
-    pub application_id: String,
-    pub name: String,
-    pub details: Option<String>,
-    pub state: Option<String>,
-    pub timestamps: Option<ActivityTimestamps>,
-    pub assets: Option<ActivityAssets>,
-    pub party: Option<ActivityParty>,
-    pub secrets: Option<ActivitySecrets>,
-    pub instance: Option<bool>,
-    pub flags: Option<u32>,
-    pub buttons: Option<Vec<String>>,
-    pub metadata: Option<ActivityMetadata>,
-    #[serde(rename = "type")]
-    pub activity_type: u8,
-}
+impl ActivityManager {
+    pub fn new(message_sender: mpsc::UnboundedSender<ActivityMessage>) -> Self {
+        Self {
+            active_games: HashMap::new(),
+            message_sender,
+        }
+    }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivityTimestamps {
-    pub start: Option<u64>,
-    pub end: Option<u64>,
-}
+    #[instrument(skip(self))]
+    pub fn update_detected_games(&mut self, detected: Vec<(&GameEntry, u32)>) {
+        let mut current_ids = std::collections::HashSet::new();
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivityAssets {
-    pub large_image: Option<String>,
-    pub large_text: Option<String>,
-    pub small_image: Option<String>,
-    pub small_text: Option<String>,
-}
+        // Process newly detected games
+        for (game, pid) in detected {
+            current_ids.insert(game.id.clone());
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivityParty {
-    pub id: Option<String>,
-    pub size: Option<[u32; 2]>,
-}
+            if !self.active_games.contains_key(&game.id) {
+                self.handle_new_game(game, pid);
+            } else {
+                self.send_activity_for_game(&game.id, Some(pid));
+            }
+        }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivitySecrets {
-    pub join: Option<String>,
-    pub spectate: Option<String>,
-    #[serde(rename = "match")]
-    pub match_secret: Option<String>,
-}
+        // Remove games that are no longer detected
+        let lost_games: Vec<String> = self
+            .active_games
+            .keys()
+            .filter(|id| !current_ids.contains(*id))
+            .cloned()
+            .collect();
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivityMetadata {
-    pub button_urls: Option<Vec<String>>,
+        for game_id in lost_games {
+            self.handle_lost_game(&game_id);
+        }
+    }
+
+    fn handle_new_game(&mut self, game: &GameEntry, pid: u32) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let active_game = ActiveGame {
+            game_id: game.id.clone(),
+            game_name: game.name.clone(),
+            pid,
+            start_timestamp: now,
+        };
+
+        self.active_games.insert(game.id.clone(), active_game);
+        self.send_activity_for_game(&game.id, Some(pid));
+    }
+
+    fn handle_lost_game(&mut self, game_id: &str) {
+        info!("Game lost: {}", game_id);
+        if let Err(e) = self
+            .active_games
+            .remove(game_id)
+            .map(ActivityMessage::clear)
+            .ok_or(anyhow!("Game id was not stored: {}", game_id))
+            .and_then(|msg| {
+                self.message_sender
+                    .send(msg)
+                    .context("Failed to send clear activity msg")
+            })
+        {
+            error!("{}", e);
+        }
+    }
+
+    #[instrument(skip(self))]
+    fn send_activity_for_game(&self, game_id: &str, pid: Option<u32>) {
+        if let Some(active_game) = self.active_games.get(game_id) {
+            debug!("Sending activity");
+            if let Err(e) = self
+                .message_sender
+                .send(ActivityMessage::active(active_game, pid))
+            {
+                error!("Failed to send activity message: {}", e);
+            }
+        }
+    }
 }

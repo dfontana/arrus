@@ -3,26 +3,20 @@ mod http_client;
 use anyhow::Context;
 use anyhow::bail;
 use axum::async_trait;
-use http_client::{HttpClient, HttpConfig};
+use http_client::HttpClient;
+pub use http_client::HttpConfig;
 use kitchen_sink::simple_store::{Fetcher, Store};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::debug;
 use tracing::info;
+use tracing::instrument;
 
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
     pub http: HttpConfig,
     pub update_interval: Duration,
-}
-
-impl Default for DatabaseConfig {
-    fn default() -> Self {
-        Self {
-            http: HttpConfig::default(),
-            update_interval: Duration::from_secs(24 * 60 * 60),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -60,27 +54,13 @@ pub struct ExecutableEntry {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GameDatabase {
     pub entries: Vec<GameEntry>,
-    pub linux_entries: Vec<GameEntry>,
     etag: String,
 }
 
 impl GameDatabase {
     fn from_slice(v: &[u8], etag: String) -> Result<GameDatabase, anyhow::Error> {
-        let entries: Vec<GameEntry> = serde_json::from_slice(v)?;
-        // TODO: Do we need to prefilter?
-        let linux_entries = entries
-            .iter()
-            .filter(|entry| {
-                entry
-                    .executables
-                    .iter()
-                    .any(|exec| exec.os == OperatingSystem::Linux)
-            })
-            .cloned()
-            .collect();
         Ok(GameDatabase {
-            entries,
-            linux_entries,
+            entries: serde_json::from_slice(v)?,
             etag,
         })
     }
@@ -105,10 +85,12 @@ impl<'a> From<&'a GameDatabase> for Vec<u8> {
 struct GameDBFetcher(Arc<HttpClient>);
 #[async_trait]
 impl Fetcher<GameDatabase> for GameDBFetcher {
+    #[instrument(skip(self, store))]
     async fn fetch(
         &self,
         store: Option<Store<GameDatabase>>,
     ) -> Result<GameDatabase, anyhow::Error> {
+        info!("Fetching database");
         let tag = store.as_ref().map(|s| s.read().etag.to_string());
         let response = self.0.download_with_etag(tag).await?;
         if response.status == reqwest::StatusCode::NOT_MODIFIED {
@@ -129,6 +111,7 @@ impl Fetcher<GameDatabase> for GameDBFetcher {
 pub async fn store(config: DatabaseConfig) -> Result<Store<GameDatabase>, anyhow::Error> {
     let mut tmp = std::env::temp_dir();
     tmp.push("discoverable.json");
+    debug!("Writing game db to {:?}", tmp);
     let f = GameDBFetcher(Arc::new(HttpClient::new(config.http)?));
     let s = Store::new_with_fetcher(tmp, f.clone()).await?;
     s.scheduled_updates(f, config.update_interval);

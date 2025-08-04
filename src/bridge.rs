@@ -13,35 +13,12 @@ use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast, mpsc};
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 #[derive(Debug, Clone)]
 pub struct BridgeConfig {
     pub port: u16,
     pub bind_address: String,
-}
-
-impl Default for BridgeConfig {
-    fn default() -> Self {
-        Self {
-            port: 1337,
-            bind_address: "127.0.0.1".to_string(),
-        }
-    }
-}
-
-impl BridgeConfig {
-    pub fn from_env() -> Result<Self, anyhow::Error> {
-        let mut config = Self::default();
-
-        if let Ok(port_str) = std::env::var("ARRPC_BRIDGE_PORT") {
-            config.port = port_str
-                .parse()
-                .map_err(|_| anyhow!("Invalid port: {}", port_str))?;
-        }
-
-        Ok(config)
-    }
 }
 
 #[derive(Clone)]
@@ -57,8 +34,7 @@ pub struct BridgeServer {
 }
 
 impl BridgeServer {
-    pub fn new() -> Result<Self, anyhow::Error> {
-        let config = BridgeConfig::from_env()?;
+    pub fn new(config: BridgeConfig) -> Result<Self, anyhow::Error> {
         let (broadcast_tx, _) = broadcast::channel(100);
         let (activity_tx, mut activity_rx) = mpsc::unbounded_channel::<ActivityMessage>();
 
@@ -75,8 +51,8 @@ impl BridgeServer {
                     cache.insert(message.socket_id.clone(), message.clone());
                 }
 
-                if state_clone.broadcast_tx.send(message).is_err() {
-                    error!("Failed to broadcast message");
+                if let Err(e) = state_clone.broadcast_tx.send(message) {
+                    error!("Failed to broadcast message: {e}");
                 }
             }
         });
@@ -93,15 +69,14 @@ impl BridgeServer {
             .route("/", get(websocket_handler))
             .with_state(self.state.clone());
 
-        let addr = format!("{}:{}", self.config.bind_address, self.config.port);
-        info!("listening on {}", self.config.port);
+        let addr = format!("{}:{}", self.config.bind_address, 1337);
+        info!("listening on {addr}");
 
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .map_err(|e| anyhow!("Bind failed to {} {:?}", addr.clone(), e))?;
 
-        axum::serve(listener, app).await.map_err(|e| anyhow!(e))?;
-
+        axum::serve(listener, app).await?;
         Ok(())
     }
 
@@ -114,25 +89,29 @@ async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) 
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
+#[instrument(skip(socket, state))]
 async fn handle_socket(socket: WebSocket, state: AppState) {
-    info!("web connected");
+    info!("Bridge client connected");
 
     let (mut sender, mut receiver) = socket.split();
     let mut broadcast_rx = state.broadcast_tx.subscribe();
 
-    {
-        let messages = state.last_messages.read().await;
-        for (_, message) in messages.iter() {
-            if message.activity.is_some() {
-                if let Ok(json) = serde_json::to_string(message) {
-                    if sender.send(Message::Text(json)).await.is_err() {
-                        error!("Failed to send catch-up message");
-                        return;
-                    }
-                }
-            }
-        }
-    }
+    // TODO: BUG -> If there's not active connections when a game is detected then nothing is broadcast
+    //      so that does make the following required, but ideally that's not the case
+    // TODO: This shouldn't be needed b/c the broadcast channel holds state
+    // {
+    //     let messages = state.last_messages.read().await;
+    //     for (_, message) in messages.iter() {
+    //         if message.activity.is_some() {
+    //             if let Ok(json) = serde_json::to_string(message) {
+    //                 if sender.send(Message::Text(json)).await.is_err() {
+    //                     error!("Failed to send catch-up message");
+    //                     return;
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 
     let send_task = tokio::spawn(async move {
         while let Ok(message) = broadcast_rx.recv().await {

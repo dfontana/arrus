@@ -21,19 +21,6 @@ pub struct HttpConfig {
     pub max_retries: u32,
 }
 
-impl Default for HttpConfig {
-    fn default() -> Self {
-        Self {
-            base_url: "https://discord.com/api/v9".to_string(),
-            endpoint: "/applications/detectable".to_string(),
-            user_agent: "arrus/1.0".to_string(),
-            timeout: Duration::from_secs(30),
-            connect_timeout: Duration::from_secs(10),
-            max_retries: 3,
-        }
-    }
-}
-
 pub struct HttpClient {
     client: ClientWithMiddleware,
     config: HttpConfig,
