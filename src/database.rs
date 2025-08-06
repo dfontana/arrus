@@ -70,7 +70,6 @@ impl TryFrom<Vec<u8>> for GameDatabase {
     type Error = anyhow::Error;
 
     fn try_from(s: Vec<u8>) -> Result<Self, Self::Error> {
-        // TODO: Maybe bincode at some point
         serde_json::from_slice(&s).context("Failed to deserialize")
     }
 }
