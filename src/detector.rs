@@ -53,14 +53,9 @@ impl ProcessDetector {
         let detected_games = self
             .scanner
             .scan_processes()?
-            .iter()
-            .map(|proc| {
-                (
-                    proc,
-                    self.path_processor.process_path(&proc.executable_path),
-                )
-            })
-            .filter_map(|(proc, pinfo)| {
+            .into_iter()
+            .filter_map(|proc| {
+                let pinfo = self.path_processor.process_path(&proc.executable_path);
                 matcher
                     .find_match(&database, &pinfo, &proc.arguments)
                     .map(|game| (game, proc.pid))
@@ -85,49 +80,41 @@ impl Matcher {
         path_info: &ProcessedPath,
         args: &[String],
     ) -> Option<&'a GameEntry> {
-        // TODO: How can this be improved? Runtime looks very poor
-        // -> Cache DB scan results: https://github.com/OpenAsar/arrpc/pull/123
-        // -> Improve linux game detection: https://github.com/OpenAsar/arrpc/pull/143 (this one builds upon https://github.com/OpenAsar/arrpc/pull/92)
-        for entry in &db.entries {
-            for executable in &entry.executables {
-                if executable.is_launcher {
-                    // TODO: Verify this logic is intended
-                    continue;
-                }
+        db.entries.iter().find_map(|entry| {
+            entry
+                .executables
+                .iter()
+                .filter(|exe| !exe.is_launcher)
+                .find(|exe| self.matches_executable(exe, path_info, args))
+                .map(|_| entry)
+        })
+    }
 
-                // TODO: Verify this logic is as-intended
-                let exe_name = &executable.name;
+    fn matches_executable(
+        &self,
+        executable: &crate::database::ExecutableEntry,
+        path_info: &ProcessedPath,
+        args: &[String],
+    ) -> bool {
+        let exe_name = &executable.name;
 
-                // Handle special ">" prefix for process name matching (like >java)
-                if let Some(process_name) = exe_name.strip_prefix('>') {
-                    // For process name matching, check if the first variant (basename) matches
-                    if let Some(first_variant) = path_info.variants.first() {
-                        if first_variant != process_name {
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    }
-                } else {
-                    // Normal path matching - check if any variant matches the executable name
-                    if !path_info.variants.iter().any(|variant| variant == exe_name) {
-                        continue;
-                    }
-                }
+        let path_matches = if let Some(process_name) = exe_name.strip_prefix('>') {
+            path_info
+                .variants
+                .first()
+                .is_some_and(|first_variant| first_variant == process_name)
+        } else {
+            path_info.variants.iter().any(|variant| variant == exe_name)
+        };
 
-                // If arguments are specified, check if process args contain the pattern
-                if let Some(required_args) = &executable.arguments {
-                    let args_string = args.join(" ");
-                    if !args_string.contains(required_args) {
-                        continue;
-                    }
-                }
-
-                return Some(entry);
-            }
+        if !path_matches {
+            return false;
         }
 
-        None
+        executable.arguments.as_ref().is_none_or(|required_args| {
+            let args_string = args.join(" ");
+            args_string.contains(required_args)
+        })
     }
 }
 
@@ -150,37 +137,37 @@ impl ProcessScanner {
     }
 
     pub fn scan_processes(&self) -> Result<Vec<ProcessInfo>, anyhow::Error> {
-        let mut processes = Vec::new();
-
         let entries = fs::read_dir(&self.proc_path)?;
-        let mut failed_read: usize = 0;
 
-        for entry in entries {
-            let entry = entry?;
-            let file_name = entry.file_name();
-            let file_name_str = file_name.to_string_lossy();
-
-            // Only process numeric directory names (PIDs)
-            if let Ok(pid) = file_name_str.parse::<u32>() {
-                if let Ok((executable_path, arguments)) = self.read_cmdline(pid) {
-                    if !executable_path.is_empty() {
+        let (processes, failed_count): (Vec<_>, usize) = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .parse::<u32>()
+                    .ok()
+                    .map(|pid| (pid, entry))
+            })
+            .fold((Vec::new(), 0), |(mut processes, mut failed), (pid, _)| {
+                match self.read_cmdline(pid) {
+                    Ok((executable_path, arguments)) if !executable_path.is_empty() => {
                         processes.push(ProcessInfo {
                             pid,
                             executable_path,
                             arguments,
                         });
                     }
-                } else {
-                    // Silently ignore processes we can't read (permissions, etc.)
-                    failed_read += 1;
+                    Ok(_) => {} // Empty executable path, ignore
+                    Err(_) => failed += 1,
                 }
-            }
-        }
+                (processes, failed)
+            });
 
         debug!(
             "Scanner found {} processes, failed to parse {}",
             processes.len(),
-            failed_read
+            failed_count
         );
 
         Ok(processes)
@@ -225,46 +212,41 @@ impl PathProcessor {
         let normalized = path.to_lowercase().replace('\\', "/");
         let split_path: Vec<&str> = normalized.split('/').collect();
 
-        let mut variants = Vec::new();
-
-        // Generate suffix combinations (like the Node.js implementation)
-        for i in 1..split_path.len() {
+        let base_variants = (1..split_path.len()).filter_map(|i| {
             let suffix = split_path[split_path.len() - i..].join("/");
-            if !suffix.is_empty() {
-                variants.push(suffix);
+            if suffix.is_empty() {
+                None
+            } else {
+                Some(suffix)
             }
-        }
+        });
 
-        // Create variants with 64-bit identifiers removed
-        let original_variants = variants.clone();
-        for variant in original_variants {
-            let mut cleaned = variant.clone();
-
-            // Remove various 64-bit patterns (matching Node.js logic)
-            cleaned = cleaned.replace("64", "");
-            if cleaned != variant {
-                variants.push(cleaned.clone());
-            }
-
-            cleaned = variant.replace(".x64", "");
-            if cleaned != variant {
-                variants.push(cleaned.clone());
-            }
-
-            cleaned = variant.replace("x64", "");
-            if cleaned != variant {
-                variants.push(cleaned.clone());
-            }
-
-            cleaned = variant.replace("_64", "");
-            if cleaned != variant {
-                variants.push(cleaned);
-            }
-        }
+        let mut variants: Vec<String> = base_variants
+            .flat_map(|variant| {
+                std::iter::once(variant.clone()).chain(Self::generate_cleaned_variants(&variant))
+            })
+            .collect();
 
         // Remove duplicates while preserving order
         let mut seen = std::collections::HashSet::new();
         variants.retain(|v| seen.insert(v.clone()));
+
         ProcessedPath { variants }
+    }
+
+    fn generate_cleaned_variants(variant: &str) -> Vec<String> {
+        let patterns = ["64", ".x64", "x64", "_64"];
+
+        patterns
+            .iter()
+            .filter_map(|&pattern| {
+                let cleaned = variant.replace(pattern, "");
+                if cleaned != variant && !cleaned.is_empty() {
+                    Some(cleaned)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
