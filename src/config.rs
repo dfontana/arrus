@@ -5,6 +5,7 @@ use crate::database::{DatabaseConfig, HttpConfig};
 use std::env;
 use std::time::Duration;
 
+#[derive(Debug)]
 pub struct Config {
     pub bridge: BridgeConfig,
     pub database: DatabaseConfig,

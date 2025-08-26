@@ -26,6 +26,7 @@ async fn main() -> Result<(), anyhow::Error> {
     logging::initalize_logging();
 
     let config = load_config();
+    info!("Loaded config: {:#?}", config);
     set_log_level(config.log_level)?;
 
     let bridge_server = BridgeServer::new(config.bridge.clone())?;

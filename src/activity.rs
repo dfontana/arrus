@@ -1,20 +1,20 @@
 mod types;
 
 use crate::database::GameEntry;
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use tracing::{debug, error, info, instrument};
 pub use types::*;
 
 pub struct ActivityManager {
     active_games: HashMap<String, ActiveGame>,
-    message_sender: mpsc::UnboundedSender<ActivityMessage>,
+    message_sender: broadcast::Sender<ActivityMessage>,
 }
 
 impl ActivityManager {
-    pub fn new(message_sender: mpsc::UnboundedSender<ActivityMessage>) -> Self {
+    pub fn new(message_sender: broadcast::Sender<ActivityMessage>) -> Self {
         Self {
             active_games: HashMap::new(),
             message_sender,
@@ -61,6 +61,7 @@ impl ActivityManager {
             pid,
             start_timestamp: now,
         };
+        info!("Game found: {:#?}", active_game);
 
         self.active_games.insert(game.id.clone(), active_game);
         self.send_activity_for_game(&game.id, Some(pid));
@@ -76,7 +77,7 @@ impl ActivityManager {
             .and_then(|msg| {
                 self.message_sender
                     .send(msg)
-                    .context("Failed to send clear activity msg")
+                    .map_err(|_| anyhow!("Failed to send clear activity msg - no receivers"))
             })
         {
             error!("{}", e);
@@ -86,12 +87,14 @@ impl ActivityManager {
     #[instrument(skip(self))]
     fn send_activity_for_game(&self, game_id: &str, pid: Option<u32>) {
         if let Some(active_game) = self.active_games.get(game_id) {
-            debug!("Sending activity");
-            if let Err(e) = self
+            debug!("Game generated activity: {}", game_id);
+            if self
                 .message_sender
                 .send(ActivityMessage::active(active_game, pid))
+                .is_err()
             {
-                error!("Failed to send activity message: {}", e);
+                // Ignore send errors when no receivers are active (expected during startup)
+                debug!("Activity message sent with no active receivers");
             }
         }
     }

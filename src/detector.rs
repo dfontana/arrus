@@ -4,7 +4,7 @@ use kitchen_sink::simple_store::Store;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument};
 
@@ -18,7 +18,7 @@ pub struct ProcessDetector {
 
 impl ProcessDetector {
     pub async fn new_with_manager(
-        message_sender: mpsc::UnboundedSender<ActivityMessage>,
+        message_sender: broadcast::Sender<ActivityMessage>,
         config: DatabaseConfig,
     ) -> Result<Self, anyhow::Error> {
         let database = store(config.clone()).await?;

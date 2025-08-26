@@ -24,6 +24,9 @@ impl ActivityMessage {
             pid,
         }
     }
+    pub fn has_activity(&self) -> bool {
+        self.activity.is_some()
+    }
     pub fn clear(active_game: ActiveGame) -> Self {
         Self {
             socket_id: active_game.game_id.to_string(),

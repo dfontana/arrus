@@ -12,7 +12,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::sync::{RwLock, broadcast};
 use tracing::{error, info, instrument};
 
 #[derive(Debug, Clone)]
@@ -30,30 +30,27 @@ pub struct AppState {
 pub struct BridgeServer {
     state: AppState,
     config: BridgeConfig,
-    activity_tx: mpsc::UnboundedSender<ActivityMessage>,
+    activity_tx: broadcast::Sender<ActivityMessage>,
 }
 
 impl BridgeServer {
     pub fn new(config: BridgeConfig) -> Result<Self, anyhow::Error> {
-        let (broadcast_tx, _) = broadcast::channel(100);
-        let (activity_tx, mut activity_rx) = mpsc::unbounded_channel::<ActivityMessage>();
+        let (activity_tx, _) = broadcast::channel(100);
 
         let state = AppState {
             last_messages: Arc::new(RwLock::new(HashMap::new())),
-            broadcast_tx: broadcast_tx.clone(),
+            broadcast_tx: activity_tx.clone(),
         };
 
+        // Cache subscriber task
         let state_clone = state.clone();
+        let mut cache_rx = activity_tx.subscribe();
         tokio::spawn(async move {
-            while let Some(message) = activity_rx.recv().await {
-                {
-                    let mut cache = state_clone.last_messages.write().await;
-                    cache.insert(message.socket_id.clone(), message.clone());
-                }
-
-                if let Err(e) = state_clone.broadcast_tx.send(message) {
-                    error!("Failed to broadcast message: {e}");
-                }
+            while let Ok(message) = cache_rx.recv().await {
+                // Socket is just gameId. This technically grows unbounded but system would need to be up
+                // a long time and a lot of unique games running, so probably fine
+                let mut cache = state_clone.last_messages.write().await;
+                cache.insert(message.socket_id.clone(), message.clone());
             }
         });
 
@@ -80,7 +77,7 @@ impl BridgeServer {
         Ok(())
     }
 
-    pub fn get_sender(&self) -> mpsc::UnboundedSender<ActivityMessage> {
+    pub fn get_sender(&self) -> broadcast::Sender<ActivityMessage> {
         self.activity_tx.clone()
     }
 }
@@ -96,22 +93,21 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
     let mut broadcast_rx = state.broadcast_tx.subscribe();
 
-    // TODO: BUG -> If there's not active connections when a game is detected then nothing is broadcast
-    //      so that does make the following required, but ideally that's not the case
-    // TODO: This shouldn't be needed b/c the broadcast channel holds state
-    // {
-    //     let messages = state.last_messages.read().await;
-    //     for (_, message) in messages.iter() {
-    //         if message.activity.is_some() {
-    //             if let Ok(json) = serde_json::to_string(message) {
-    //                 if sender.send(Message::Text(json)).await.is_err() {
-    //                     error!("Failed to send catch-up message");
-    //                     return;
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
+    {
+        // Catch up to the activity feed, eg if a game was detected but there was no discord client this
+        // will feed it in.
+        let messages = state.last_messages.read().await;
+        for (_, message) in messages.iter() {
+            if message.has_activity() {
+                if let Ok(json) = serde_json::to_string(message) {
+                    if sender.send(Message::Text(json)).await.is_err() {
+                        error!("Failed to send catch-up message");
+                        return;
+                    }
+                }
+            }
+        }
+    }
 
     let send_task = tokio::spawn(async move {
         while let Ok(message) = broadcast_rx.recv().await {
