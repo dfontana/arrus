@@ -1,12 +1,12 @@
 use crate::activity::{ActivityManager, ActivityMessage};
-use crate::database::{DatabaseConfig, GameDatabase, GameEntry, store};
+use crate::database::{DatabaseChange, DatabaseConfig, GameDatabase, GameEntry, store};
 use kitchen_sink::simple_store::Store;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, warn};
 
 pub struct ProcessDetector {
     database: Store<GameDatabase>,
@@ -14,6 +14,7 @@ pub struct ProcessDetector {
     path_processor: PathProcessor,
     activity_manager: ActivityManager,
     scan_interval: Duration,
+    change_recv: broadcast::Receiver<DatabaseChange>,
 }
 
 impl ProcessDetector {
@@ -21,13 +22,16 @@ impl ProcessDetector {
         message_sender: broadcast::Sender<ActivityMessage>,
         config: DatabaseConfig,
     ) -> Result<Self, anyhow::Error> {
-        let database = store(config.clone()).await?;
+        let change_sender = broadcast::Sender::new(100);
+        let change_recv = change_sender.subscribe();
+        let database = store(config.clone(), change_sender).await?;
         Ok(Self {
             database,
             scanner: ProcessScanner::new(),
             path_processor: PathProcessor::new(),
             activity_manager: ActivityManager::new(message_sender),
             scan_interval: Duration::from_secs(5),
+            change_recv,
         })
     }
 
@@ -47,9 +51,28 @@ impl ProcessDetector {
     async fn scan_cycle(&mut self) -> Result<(), anyhow::Error> {
         let start_time = Instant::now();
 
-        let matcher = Matcher {};
+        // TODO impl the matching cache and invalidate based on these changes
+        match self.change_recv.try_recv() {
+            Ok(change) => match change {
+                DatabaseChange::Added => debug!("DB was added to, should invalidate"),
+                DatabaseChange::Touched(items) => {
+                    debug!("DB was touched: {:?}", items);
+                }
+                DatabaseChange::None => debug!("DB had no updates, cache valid"), // Nothing, cache is valid
+            },
+            Err(broadcast::error::TryRecvError::Empty) => {
+                debug!("No DB updates in channel, cache is valid")
+            }
+            Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                warn!("Falling behind on updates (skipped {skipped}), are scan cycles slow?");
+            }
+            Err(broadcast::error::TryRecvError::Closed) => {
+                error!("Sender was dropped, can no longer recv");
+            }
+        }
 
         let database = self.database.read();
+        let matcher = Matcher {};
         let detected_games = self
             .scanner
             .scan_processes()?

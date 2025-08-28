@@ -59,8 +59,8 @@ pub fn load_config() -> Config {
 
     // DB Scheduler configuration
     if let Ok(interval_str) = env::var("ARRUS_DB_UPDATE_INTERVAL") {
-        if let Ok(interval_hours) = interval_str.parse::<u64>() {
-            config.database.update_interval = Duration::from_secs(interval_hours * 3600);
+        if let Ok(interval_seconds) = interval_str.parse::<u64>() {
+            config.database.update_interval = Duration::from_secs(interval_seconds);
         }
     }
 

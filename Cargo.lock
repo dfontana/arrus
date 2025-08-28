@@ -774,8 +774,8 @@ dependencies = [
 
 [[package]]
 name = "kitchen-sink"
-version = "0.1.0"
-source = "git+https://github.com/dfontana/kitchen-sink.git?tag=0.1.1#cbe303e416fb33556a7b81b5462e804113271ee6"
+version = "0.1.2"
+source = "git+https://github.com/dfontana/kitchen-sink.git?tag=0.1.2#27ffa9a8d5125ff5afd6e65d8c4ec1ca52947aa7"
 dependencies = [
  "anyhow",
  "async-trait",
