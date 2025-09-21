@@ -1,13 +1,13 @@
 use crate::activity::{ActivityManager, ActivityMessage};
 use crate::database::{DatabaseChange, DatabaseConfig, GameDatabase, GameEntry, store};
 use kitchen_sink::simple_store::Store;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 pub struct ProcessDetector {
     database: Store<GameDatabase>,
@@ -57,11 +57,11 @@ impl ProcessDetector {
         match self.change_recv.try_recv() {
             Ok(change) => match change {
                 DatabaseChange::Added => {
-                    debug!("DB was added to, invalidating cache");
+                    info!("DB was added to, invalidating cache");
                     self.matching_cache.clear();
                 }
                 DatabaseChange::Touched(items) => {
-                    debug!("DB was touched: {:?}, invalidating cache", items);
+                    info!("DB was touched: {:?}, invalidating cache", items);
                     self.matching_cache.clear();
                 }
                 DatabaseChange::None => debug!("DB had no updates, cache valid"),
@@ -80,12 +80,14 @@ impl ProcessDetector {
 
         let database = self.database.read();
         let matcher = Matcher {};
+        let mut seen_keys: HashSet<(String, Vec<String>)> = HashSet::new();
         let detected_games = self
             .scanner
             .scan_processes()?
             .into_iter()
             .filter_map(|proc| {
                 let cache_key = (proc.executable_path.clone(), proc.arguments.clone());
+                seen_keys.insert(cache_key.clone());
 
                 // Check cache first
                 if let Some(cached_result) = self.matching_cache.get(&cache_key) {
@@ -118,10 +120,9 @@ impl ProcessDetector {
         // Update activity manager with detected games
         self.activity_manager.update_detected_games(detected_games);
 
-        // TODO: Need to prune the cache to prevent unbounded growth, perhaps on some random
-        //       key selection. Perhaps delete anything in cache that doesn't come up in the
-        //       current process scan loop process list after some threshold (cache is 2x the
-        //       number of keys in the current loop?)
+        if self.matching_cache.len() > 2 * seen_keys.len() {
+            self.matching_cache.retain(|k, _| seen_keys.contains(k));
+        }
 
         let duration = start_time.elapsed();
         debug!("Scan took {:?}", duration);
