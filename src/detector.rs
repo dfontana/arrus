@@ -93,6 +93,8 @@ impl ProcessDetector {
                         // Find the game entry by ID, since Database owns the games this is a simple
                         // way to unify the code paths for now but causes an in memory scan over the
                         // DB (far from ideal)
+                        // TODO: Can the DB store by game_id for O(1) lookup? If not, can we clone the data
+                        //       without a large cost to avoid the loop?
                         database
                             .entries
                             .iter()
@@ -115,6 +117,11 @@ impl ProcessDetector {
 
         // Update activity manager with detected games
         self.activity_manager.update_detected_games(detected_games);
+
+        // TODO: Need to prune the cache to prevent unbounded growth, perhaps on some random
+        //       key selection. Perhaps delete anything in cache that doesn't come up in the
+        //       current process scan loop process list after some threshold (cache is 2x the
+        //       number of keys in the current loop?)
 
         let duration = start_time.elapsed();
         debug!("Scan took {:?}", duration);
