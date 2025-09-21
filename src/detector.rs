@@ -1,6 +1,7 @@
 use crate::activity::{ActivityManager, ActivityMessage};
 use crate::database::{DatabaseChange, DatabaseConfig, GameDatabase, GameEntry, store};
 use kitchen_sink::simple_store::Store;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -15,6 +16,7 @@ pub struct ProcessDetector {
     activity_manager: ActivityManager,
     scan_interval: Duration,
     change_recv: broadcast::Receiver<DatabaseChange>,
+    matching_cache: HashMap<(String, Vec<String>), Option<String>>,
 }
 
 impl ProcessDetector {
@@ -32,6 +34,7 @@ impl ProcessDetector {
             activity_manager: ActivityManager::new(message_sender),
             scan_interval: Duration::from_secs(5),
             change_recv,
+            matching_cache: HashMap::new(),
         })
     }
 
@@ -51,20 +54,24 @@ impl ProcessDetector {
     async fn scan_cycle(&mut self) -> Result<(), anyhow::Error> {
         let start_time = Instant::now();
 
-        // TODO impl the matching cache and invalidate based on these changes
         match self.change_recv.try_recv() {
             Ok(change) => match change {
-                DatabaseChange::Added => debug!("DB was added to, should invalidate"),
-                DatabaseChange::Touched(items) => {
-                    debug!("DB was touched: {:?}", items);
+                DatabaseChange::Added => {
+                    debug!("DB was added to, invalidating cache");
+                    self.matching_cache.clear();
                 }
-                DatabaseChange::None => debug!("DB had no updates, cache valid"), // Nothing, cache is valid
+                DatabaseChange::Touched(items) => {
+                    debug!("DB was touched: {:?}, invalidating cache", items);
+                    self.matching_cache.clear();
+                }
+                DatabaseChange::None => debug!("DB had no updates, cache valid"),
             },
             Err(broadcast::error::TryRecvError::Empty) => {
                 debug!("No DB updates in channel, cache is valid")
             }
             Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
                 warn!("Falling behind on updates (skipped {skipped}), are scan cycles slow?");
+                self.matching_cache.clear();
             }
             Err(broadcast::error::TryRecvError::Closed) => {
                 error!("Sender was dropped, can no longer recv");
@@ -78,10 +85,31 @@ impl ProcessDetector {
             .scan_processes()?
             .into_iter()
             .filter_map(|proc| {
+                let cache_key = (proc.executable_path.clone(), proc.arguments.clone());
+
+                // Check cache first
+                if let Some(cached_result) = self.matching_cache.get(&cache_key) {
+                    return cached_result.as_ref().and_then(|game_id| {
+                        // Find the game entry by ID, since Database owns the games this is a simple
+                        // way to unify the code paths for now but causes an in memory scan over the
+                        // DB (far from ideal)
+                        database
+                            .entries
+                            .iter()
+                            .find(|entry| &entry.id == game_id)
+                            .map(|game| (game, proc.pid))
+                    });
+                }
+
+                // Cache miss - perform matching
                 let pinfo = self.path_processor.process_path(&proc.executable_path);
-                matcher
-                    .find_match(&database, &pinfo, &proc.arguments)
-                    .map(|game| (game, proc.pid))
+                let match_result = matcher.find_match(&database, &pinfo, &proc.arguments);
+
+                // Store result in cache
+                let game_id = match_result.map(|game| game.id.clone());
+                self.matching_cache.insert(cache_key, game_id);
+
+                match_result.map(|game| (game, proc.pid))
             })
             .collect();
 
