@@ -62,14 +62,15 @@ pub enum DatabaseChange {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameDatabase {
-    pub entries: Vec<GameEntry>,
+    pub entries: HashMap<String, GameEntry>,
     etag: String,
 }
 
 impl GameDatabase {
     fn from_slice(v: &[u8], etag: String) -> Result<GameDatabase, anyhow::Error> {
+        let entries: Vec<GameEntry> = serde_json::from_slice(v)?;
         Ok(GameDatabase {
-            entries: serde_json::from_slice(v)?,
+            entries: entries.into_iter().map(|e| (e.id.clone(), e)).collect(),
             etag,
         })
     }
@@ -128,10 +129,8 @@ impl Fetcher<GameDatabase> for GameDBFetcher {
 impl GameDBFetcher {
     fn diff(old_db: &GameDatabase, new_db: &GameDatabase) -> DatabaseChange {
         // Create lookup maps by game ID
-        let old_games: HashMap<&String, &GameEntry> =
-            old_db.entries.iter().map(|e| (&e.id, e)).collect();
-        let new_games: HashMap<&String, &GameEntry> =
-            new_db.entries.iter().map(|e| (&e.id, e)).collect();
+        let old_games: &HashMap<String, GameEntry> = &old_db.entries;
+        let new_games: &HashMap<String, GameEntry> = &new_db.entries;
         let mut touched: Vec<String> = Vec::new();
 
         for id in new_games.keys() {
@@ -148,7 +147,7 @@ impl GameDBFetcher {
         }
 
         // Find modified games - check executables that affect matching
-        for (id, new_entry) in &new_games {
+        for (id, new_entry) in new_games {
             if let Some(old_entry) = old_games.get(id) {
                 let new_exe_set: HashSet<&ExecutableEntry> =
                     HashSet::from_iter(new_entry.executables.iter());
@@ -212,7 +211,10 @@ mod tests {
                     "game1.exe",
                     OperatingSystem::Windows,
                 )],
-            )],
+            )]
+            .into_iter()
+            .map(|e| (e.id.clone(), e))
+            .collect(),
             etag: "old".to_string(),
         };
 
@@ -234,7 +236,10 @@ mod tests {
                         OperatingSystem::Windows,
                     )],
                 ),
-            ],
+            ]
+            .into_iter()
+            .map(|e| (e.id.clone(), e))
+            .collect(),
             etag: "new".to_string(),
         };
 
@@ -252,7 +257,10 @@ mod tests {
                     "game1.exe",
                     OperatingSystem::Windows,
                 )],
-            )],
+            )]
+            .into_iter()
+            .map(|e| (e.id.clone(), e))
+            .collect(),
             etag: "old".to_string(),
         };
 
@@ -264,7 +272,10 @@ mod tests {
                     create_test_executable("game1.exe", OperatingSystem::Windows),
                     create_test_executable("game1_linux", OperatingSystem::Linux),
                 ],
-            )],
+            )]
+            .into_iter()
+            .map(|e| (e.id.clone(), e))
+            .collect(),
             etag: "new".to_string(),
         };
 
@@ -286,7 +297,10 @@ mod tests {
                     "game1.exe",
                     OperatingSystem::Windows,
                 )],
-            )],
+            )]
+            .into_iter()
+            .map(|e| (e.id.clone(), e))
+            .collect(),
             etag: "old".to_string(),
         };
 
@@ -298,7 +312,10 @@ mod tests {
                     "game1.exe",
                     OperatingSystem::Windows,
                 )],
-            )],
+            )]
+            .into_iter()
+            .map(|e| (e.id.clone(), e))
+            .collect(),
             etag: "new".to_string(),
         };
 

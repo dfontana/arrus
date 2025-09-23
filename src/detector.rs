@@ -91,18 +91,10 @@ impl ProcessDetector {
 
                 // Check cache first
                 if let Some(cached_result) = self.matching_cache.get(&cache_key) {
-                    return cached_result.as_ref().and_then(|game_id| {
-                        // Find the game entry by ID, since Database owns the games this is a simple
-                        // way to unify the code paths for now but causes an in memory scan over the
-                        // DB (far from ideal)
-                        // TODO: Can the DB store by game_id for O(1) lookup? If not, can we clone the data
-                        //       without a large cost to avoid the loop?
-                        database
-                            .entries
-                            .iter()
-                            .find(|entry| &entry.id == game_id)
-                            .map(|game| (game, proc.pid))
-                    });
+                    return cached_result
+                        .as_ref()
+                        .and_then(|game_id| database.entries.get(game_id))
+                        .map(|g| (g, proc.pid));
                 }
 
                 // Cache miss - perform matching
@@ -141,11 +133,12 @@ impl Matcher {
     ) -> Option<&'a GameEntry> {
         db.entries.iter().find_map(|entry| {
             entry
+                .1
                 .executables
                 .iter()
                 .filter(|exe| !exe.is_launcher)
                 .find(|exe| self.matches_executable(exe, path_info, args))
-                .map(|_| entry)
+                .map(|_| entry.1)
         })
     }
 
