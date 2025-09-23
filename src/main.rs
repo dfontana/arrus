@@ -25,7 +25,7 @@ Bridge is a WSS which:
 async fn main() -> Result<(), anyhow::Error> {
     logging::initalize_logging();
 
-    let config = load_config();
+    let config = load_config()?;
     info!("Loaded config: {:#?}", config);
     set_log_level(config.log_level)?;
 

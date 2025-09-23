@@ -2,7 +2,7 @@
 Description=RPC Impl for Vesktop
 
 [Service]
-ExecStart=arrus
+ExecStart=%h/.cargo/bin/arrus
 Restart=on-failure
 Environment="ARRUS_DB_UPDATE_INTERVAL=14400"
 

@@ -3,6 +3,8 @@ use tracing::Level;
 use crate::bridge::BridgeConfig;
 use crate::database::{DatabaseConfig, HttpConfig};
 use std::env;
+use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -12,7 +14,48 @@ pub struct Config {
     pub log_level: Level,
 }
 
-pub fn load_config() -> Config {
+fn parse_db_path() -> Result<PathBuf, anyhow::Error> {
+    if let Ok(db_folder) = env::var("ARRUS_DB_FOLDER") {
+        let path = PathBuf::from(db_folder);
+
+        // Validate that the directory exists
+        if !path.exists() {
+            return Err(anyhow::anyhow!(
+                "ARRUS_DB_FOLDER path does not exist: {}",
+                path.display()
+            ));
+        }
+
+        if !path.is_dir() {
+            return Err(anyhow::anyhow!(
+                "ARRUS_DB_FOLDER path is not a directory: {}",
+                path.display()
+            ));
+        }
+
+        // Test write permissions by attempting to create a temporary file
+        let test_file = path.join(".arrus_write_test");
+        if let Err(e) = fs::write(&test_file, b"test") {
+            return Err(anyhow::anyhow!(
+                "ARRUS_DB_FOLDER path is not writable: {} ({})",
+                path.display(),
+                e
+            ));
+        }
+
+        // Clean up test file
+        let _ = fs::remove_file(test_file);
+
+        Ok(path)
+    } else {
+        // Fallback to temp directory
+        Ok(env::temp_dir())
+    }
+}
+
+pub fn load_config() -> Result<Config, anyhow::Error> {
+    let db_path = parse_db_path()?;
+
     let mut config = Config {
         bridge: BridgeConfig {
             port: 1337,
@@ -28,6 +71,7 @@ pub fn load_config() -> Config {
                 max_retries: 3,
             },
             update_interval: Duration::from_secs(15 * 60),
+            db_path,
         },
         log_level: Level::INFO,
     };
@@ -78,5 +122,5 @@ pub fn load_config() -> Config {
         }
     }
 
-    config
+    Ok(config)
 }

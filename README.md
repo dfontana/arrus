@@ -13,5 +13,6 @@ All done via ENV at the moment:
 - `ARRUS_DB_TIMEOUT`: Duration in seconds to wait for http request
 - `ARRUS_DB_MAX_RETRIES`: How many times to retry a request to discord before giving up (in one refresh loop)
 - `ARRUS_DB_UPDATE_INTERVAL`: How often to check the discord api for updates to the game database. This is cached on your system during boot and only updated after the etag indicates a difference. Suggested to set this to something high. Refresh is checked on first start and every `UPDATE_INTERVAL` there-after.
+- `ARRUS_DB_FOLDER`: Directory where the cached game database file is stored. Must exist and be writable by the application. If not set, falls back to the system temporary directory.
 - `ARRUS_BRIDGE_PORT`: Port to run the bridge on, changing from default will likely not work for Vesktop
 - `ARRUS_LOG_LEVEL`: Detail to log at, default is `INFO`.

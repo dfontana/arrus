@@ -9,10 +9,10 @@ use kitchen_sink::simple_store::{Fetcher, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::instrument;
@@ -21,6 +21,7 @@ use tracing::instrument;
 pub struct DatabaseConfig {
     pub http: HttpConfig,
     pub update_interval: Duration,
+    pub db_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -171,11 +172,10 @@ pub async fn store(
     config: DatabaseConfig,
     changes: broadcast::Sender<DatabaseChange>,
 ) -> Result<Store<GameDatabase>, anyhow::Error> {
-    let mut tmp = std::env::temp_dir();
-    tmp.push("discoverable.json");
-    debug!("Writing game db to {:?}", tmp);
+    let db_file = config.db_path.join("discoverable.json");
+    info!("Caching game DB to {:?}", db_file);
     let f = GameDBFetcher(Arc::new(HttpClient::new(config.http)?), changes);
-    let s = Store::new_with_fetcher(tmp, f.clone()).await?;
+    let s = Store::new_with_fetcher(db_file, f.clone()).await?;
     s.scheduled_updates(f, config.update_interval);
     Ok(s)
 }
